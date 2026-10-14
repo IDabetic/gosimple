@@ -1,0 +1,16 @@
+# Prelomi redova su LF svuda, uključujući Windows radne kopije.
+#
+# Bez ovoga Windows pri checkoutu pretvara LF u CRLF, pa se isti .gs fajl
+# na dve platforme ponaša različito. Jezik koji obećava da isti program daje
+# isti rezultat ne sme da zavisi od toga ko ga je klonirao.
+* text=auto eol=lf
+
+# Binarni sadržaj se ne dira.
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.pdf binary
+
+# Generisani fajl — isključen iz diffova u pregledu, ali se i dalje verzioniše.
+examples/schema.sql linguist-generated=true
