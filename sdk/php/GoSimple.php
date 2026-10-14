@@ -88,6 +88,19 @@ final class GoSimple
         return $this->get('/health');
     }
 
+    /**
+     * Asks the runtime to re-read the source it was started with.
+     *
+     * The catalogue never travels in this request; the server rejects a body.
+     * Requires the runtime to run with GOSIMPLE_TOKEN.
+     *
+     * @return array{status: string, documents: int, added: int, updated: int, removed: int}
+     */
+    public function reload(): array
+    {
+        return $this->request('POST', '/reload', null);
+    }
+
     /** @return array<string, mixed> The compiled IR plan currently in effect. */
     public function plan(): array
     {

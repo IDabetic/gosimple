@@ -339,7 +339,7 @@ export function createSource(config: IRSource, baseDir: string): SourceAdapter {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(config.uri)) {
     const scheme = config.uri.slice(0, config.uri.indexOf(':'));
     throw new SourceError(
-      `Nepodržan izvor "${scheme}://". v0.1 podržava JSON fajlove i postgres://.`,
+      `Nepodržan izvor "${scheme}://". Podržani su JSON fajlovi i postgres://.`,
     );
   }
   const path = expandEnv(config.uri);

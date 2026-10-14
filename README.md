@@ -139,6 +139,8 @@ return view('home', [
 
 Za Laravel registrujte `GoSimple\GoSimpleServiceProvider` i podesite `GOSIMPLE_URL` i `GOSIMPLE_TOKEN` u `.env`; klijent se posle toga samo tipizuje u konstruktoru ili akciji.
 
+Posle uvoza proizvoda, na primer na kraju posla u redu: `$gs->reload();`. Runtime ponovo čita izvor sa kog je pokrenut; katalog se ne šalje kroz zahtev.
+
 **Next.js / Nuxt**
 
 ```ts
@@ -344,16 +346,17 @@ Podizanje i upit se prijavljuju odvojeno zato što se razlikuju za tri reda veli
 
 Dva koraka su bila kvadratna i više nisu: poređenje opisa radi originalnosti i prolazak kroz ceo katalog pri poklapanju. Na 10 000 proizvoda podizanje je bilo 29,4 s, sada je 1,3 s; 100 000 ranije nije završavalo uopšte. Nijedan od ta dva popravka ne menja rezultate — i jedan i drugi imaju test koji poredi brzi put sa sporim i traži identičan izlaz.
 
-## Šta v0.1 NE radi
+## Šta v0.2 NE radi
 
 Ovo je spisak stvarnih granica, ne roadmap:
 
-- **Razmera.** Indeks je u memoriji. Sto hiljada proizvoda radi (vidi merenja ispod), milion ne. Izmena kataloga više ne traži restart: `POST /reload` ponovo čita isti izvor, a indeks se dopunjuje. Telo zahteva se odbija — katalog ne putuje mrežom.
+- **Razmera.** Indeks je u memoriji. Sto hiljada proizvoda radi (vidi merenja iznad), milion ne. Izmena kataloga više ne traži restart: `POST /reload` ponovo čita isti izvor, a indeks se dopunjuje. Telo zahteva se odbija — katalog ne putuje mrežom.
+- **Reload je inkrementalan samo za pretragu.** Preporučivač se na reload-u gradi iz nule, a događaji (`events`) ostaju oni učitani pri pokretanju; nove kupovine ulaze tek posle restarta.
 - **Lokalni embeddinzi nisu značenje.** Podrazumevani provajder se zato i predstavlja kao `lexical-vector`, a ne kao `semantic`: heširani karakterski trigrami hvataju pravopisnu sličnost, pa će „svećica" i „sveća" biti blizu, ali „sijalica" i „rasveta" neće. Za pravo značenje treba `GOSIMPLE_EMBEDDING=openai`, što znači mrežni poziv i trošak.
 - **Jezik.** Normalizacija je podešena za srpski. Drugi jezici će proći kroz cevovod, ali stopwords i korenovanje im neće odgovarati.
 - **Rate limiting je po procesu.** Iza load balancera svaka instanca broji zasebno.
 - **Jedan engine po fajlu.**
-- **Bez A/B infrastrukture.** Jezik objašnjava zašto je rezultat takav kakav jeste, ali ne meri da li je bolji od alternative.
+- **Bez A/B testiranja na živom prometu.** `gs eval --compare` poredi dva plana nad zlatnim skupom pre puštanja, ali ništa ne meri klikove ni konverziju u produkciji.
 
 Od adaptera postoje JSON i PostgreSQL; MySQL, OpenSearch i ClickHouse ne postoje.
 

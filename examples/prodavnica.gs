@@ -1,4 +1,4 @@
-# GoSimple v0.1 — pretraga proizvoda sa zaštitom namere
+# GoSimple — pretraga proizvoda sa zaštitom namere
 #
 # Problem koji ovaj program rešava: reč "svećice" u srpskom znači i auto-deo,
 # i baštensku dekoraciju, i novogodišnji ukras. Sezonski signal sam za sebe bi

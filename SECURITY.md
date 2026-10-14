@@ -72,7 +72,7 @@ Navodim ih eksplicitno jer su realna:
 2. **Identifikacija klijenta ide po `remoteAddress`.** Ako radite iza reverse proxyja, svi zahtevi deluju kao da dolaze sa jedne adrese. `X-Forwarded-For` se namerno **ne** čita, jer je taj zaglavlje falsifikovano kad proxy nije pouzdan.
 3. **Nema TLS-a.** Runtime je predviđen da radi na loopbacku iza proxyja koji terminira TLS.
 4. **Nema multi-tenant izolacije.** Jedan proces služi jedan plan i jedan katalog.
-5. **Katalog se učitava u memoriju u celosti.** Za velike kataloge je potreban indeksni adapter, koji v0.1 nema.
+5. **Katalog se učitava u memoriju u celosti.** Sto hiljada proizvoda radi, milion ne. Za velike kataloge je potreban indeksni adapter (OpenSearch, Vespa), koji još ne postoji.
 6. **Nema audit loga.** Postoji samo logovanje grešaka na stderr.
 7. **`.gs` fajl ima punu moć nad konfigurisanim izvorom.** Gramatika `where` uslova sprečava čitanje drugih tabela, ali `table` i `map` i dalje biraju šta se čita iz baze. Ko piše `.gs` fajl, bira i podatke — zato se tretira kao izvorni kod, a ne kao konfiguracija koju sme da menja bilo ko.
 8. **Nalog za bazu treba da bude samo za čitanje.** Runtime nikada ne izvršava `INSERT`, `UPDATE` ni `DELETE`, pa nalog kom su te dozvole date daje više nego što je potrebno. To je odbrana u dubinu, a ne zamena za gornje kontrole.

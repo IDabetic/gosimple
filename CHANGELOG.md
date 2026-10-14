@@ -3,7 +3,12 @@
 Format prati [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 verzionisanje je [semantičko](https://semver.org/lang/sr/).
 
-## [Neobjavljeno]
+## [0.2.0] — 2026-10-14
+
+Izdanje o razmeri i merenju. Katalog od 100 000 proizvoda sada radi, izmena
+rangiranja se brani brojkama umesto utiskom, a katalog se osvežava bez
+restarta. Jezik se nije promenio: parser, kompajler i IR su isti, pa se
+svaki v0.1 program kompajlira u isti plan.
 
 ### Promenjeno
 
@@ -60,11 +65,27 @@ provera bila moguća.
   zatvoren dok nije postavljen `GOSIMPLE_TOKEN`. Dva istovremena zahteva
   dele jedno učitavanje.
 
+- `reload()` u TypeScript SDK-u i u PHP SDK-u (Laravel).
+
 ### Ispravljeno
 
 - Dva identična prazna opisa više ne dobijaju duplikaciju 1. Tekst kraći od
   jednog šingla ne daje nikakav dokaz, a modul za sadržaj ne iznosi tvrdnje
   koje ne može da potkrepi.
+- Naslov `SPEC.md` je u v0.1.0 bio slomljen.
+
+### Poznata ograničenja
+
+- Na `POST /reload` preporučivač se gradi iz nule nad novim katalogom, a
+  događaji (`events`) ostaju oni učitani pri pokretanju. Inkrementalan je
+  samo indeks pretrage.
+- Izmena koja menja samo redosled polja u dokumentu računa se kao izmena
+  dokumenta. Rezultati ostaju tačni, ali se taj dokument nepotrebno
+  preračunava.
+- Semantičko poklapanje (`match { semantic }`) i dalje prolazi kroz ceo
+  katalog. Namerno: invertovani indeks nad terminima ne može da nađe
+  dokument koji nema nijednu zajedničku reč sa upitom.
+- Indeks je i dalje u memoriji: 100 000 proizvoda radi, milion ne.
 
 ## [0.1.0] — 2026-10-14
 
@@ -213,4 +234,5 @@ Namerno nabrojana, da ne biste otkrivali u produkciji. Puna lista je u
 - Lokalni embeddinzi hvataju pravopisnu sličnost, ne značenje.
 - Normalizacija teksta je podešena za srpski.
 
+[0.2.0]: https://github.com/IDabetic/gosimple/releases/tag/v0.2.0
 [0.1.0]: https://github.com/IDabetic/gosimple/releases/tag/v0.1.0

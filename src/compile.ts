@@ -188,7 +188,7 @@ export function compile(program: Program, source: string, file = '<memory>'): Co
   if (engines.length > 1) {
     error(
       'GS2016',
-      `Pronađeno ${engines.length} engine blokova; v0.1 podržava tačno jedan po fajlu`,
+      `Pronađeno ${engines.length} engine blokova; podržan je tačno jedan po fajlu`,
       engines[1]!.span,
       'Razdvojite ih u zasebne .gs fajlove.',
     );

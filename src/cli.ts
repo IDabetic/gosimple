@@ -295,7 +295,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   if (args.command === 'help' || args.command === '--help' || args.command === '-h') {
-    console.log(`${BOLD}GoSimple${RESET} v0.1 — jezik za pretragu, rangiranje i preporuke
+    console.log(`${BOLD}GoSimple${RESET} v0.2 — jezik za pretragu, rangiranje i preporuke
 
 ${BOLD}Komande${RESET}
   gs check   <fajl.gs>                    provera sintakse i semantike

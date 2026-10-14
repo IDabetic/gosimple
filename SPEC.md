@@ -1,4 +1,4 @@
-# GoSimple — specifikacija jezika v0.1
+# GoSimple — specifikacija jezika v0.2
 
 Ovaj dokument opisuje ono što je **implementirano i pokriveno testovima**. Konstrukcije koje nisu implementirane su izričito označene.
 

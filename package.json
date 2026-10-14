@@ -1,6 +1,6 @@
 {
   "name": "gosimple-lang",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GoSimple — declarative language for search, ranking and recommendations with intent protection",
   "keywords": [
     "search",
