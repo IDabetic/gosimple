@@ -1,8 +1,4 @@
-| `GS2106` | `table` i `map` na izvoru koji nije SQL se ignorišu |
-| `GS2107` | `recommend` bez `learn from` || `GS2044` | SQL izvor ne mapira `id`, `title` i `category` |
-| `GS2045` | `limit` nije pozitivan || `GS2040` | nepoznato polje dokumenta u `map` bloku |
-| `GS2041` | SQL izvor nema navedenu tabelu |
-| `GS2042` | `where` sadrži# GoSimple — specifikacija jezika v0.1
+# GoSimple — specifikacija jezika v0.1
 
 Ovaj dokument opisuje ono što je **implementirano i pokriveno testovima**. Konstrukcije koje nisu implementirane su izričito označene.
 
@@ -290,9 +286,12 @@ Taj uslov ne sadrži nijedan zabranjen znak, uredno se nadovezuje na `SELECT` i 
 | `GS2027` | težina faktora van opsega `(0, 1]` |
 | `GS2028` | `explore` van opsega `[0, 1)` |
 | `GS2030`–`GS2031` | nepoznata analiza ili ocena u `content` bloku |
-| `GS2042` | `where` sadrži `;`, `--` ili `/*` |
+| `GS2040` | nepoznato polje dokumenta u `map` bloku |
+| `GS2041` | SQL izvor nema navedenu tabelu |
+| `GS2042` | `where` uslov se ne uklapa u allowlist gramatiku |
 | `GS2043` | ime tabele ili kolone nije validan identifikator |
 | `GS2044` | SQL izvor ne mapira `id`, `title` i `category` |
+| `GS2045` | `limit` nije pozitivan |
 
 ### Upozorenja
 
@@ -305,6 +304,7 @@ Taj uslov ne sadrži nijedan zabranjen znak, uredno se nadovezuje na `SELECT` i 
 | `GS2103` | **sezonski signal bez `protect intent`** |
 | `GS2104` | signal pripada dvema kategorijama |
 | `GS2105` | `semantic` polje koristi lokalni provajder, koji meri pravopis a ne značenje |
+| `GS2106` | `table` i `map` na izvoru koji nije SQL se ignorišu |
 | `GS2107` | `recommend` bez `learn from` |
 | `GS2108` | `recommend` nema nijedan faktor |
 | `GS2109` | **svi faktori zavise od istorije, pa novi posetilac ne dobija ništa** |
@@ -328,6 +328,13 @@ Jedino polje koje se razlikuje između dva izvršavanja je `stats.durationMs`, j
 Signali koji zavise od vremena (`freshness`, `seasonal_relevance`) čitaju `now` iz zahteva, nikada sistemski sat, kada je prosleđen. Pri jednakim skorovima presuđuje ID, pa ni redosled ne zavisi od redosleda obilaska.
 
 Bez ove osobine promene u rangiranju nije moguće recenzirati niti reprodukovati regresiju.
+
+Reload kataloga je deo te osobine: engine koji je dopunjen mora da odgovara
+isto kao engine podignut iz nule nad istim katalogom. `Engine.reload`
+prima ceo spisak, sam izračuna razliku, i preračunava samo ono što se
+promenilo — uključujući originalnost suseda, jer je to mera u odnosu na
+katalog a ne na dokument. HTTP `POST /reload` samo ponovo čita izvor sa
+kog je proces pokrenut; telo zahteva je greška, ne ulaz.
 
 ## 7. Ocena rangiranja
 

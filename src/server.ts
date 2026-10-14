@@ -18,6 +18,9 @@
  *  5. Optional bearer token auth, compared in constant time.
  *  6. CORS is deny-by-default and opens only to an explicit origin allowlist.
  *  7. Error responses never echo internal paths or stack traces.
+ *  8. POST /reload re-reads the configured source. It refuses a request
+ *     body, requires a bearer token, and never accepts documents from the
+ *     network. Overlapping calls share one load so they cannot race the index.
  *
  * What this does NOT claim: that the system is free of vulnerabilities. It
  * claims a small, auditable attack surface and named, testable controls.
@@ -26,7 +29,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import type { Plan } from './ir.ts';
-import { Engine, type Doc, type SearchRequest } from './runtime/execute.ts';
+import { Engine, type CatalogChange, type Doc, type SearchRequest } from './runtime/execute.ts';
 import { analyzeContent } from './runtime/content.ts';
 import { createEmbeddingProvider } from './runtime/embed.ts';
 import { Recommender, type Event, type RecommendRequest } from './runtime/recommend.ts';
@@ -224,15 +227,29 @@ function parseRecommendRequest(raw: unknown): RecommendRequest {
   return request;
 }
 
-export async function startServer(
+export type RuntimeHandle = {
+  port: number;
+  close(): Promise<void>;
+};
+
+/**
+ * Starts the HTTP runtime and returns a handle.
+ *
+ * Process signal handlers live in {@link startServer}, which is what the
+ * CLI calls. Tests use this function so they can open and close a port
+ * without installing handlers that would outlive the test.
+ */
+export async function createRuntime(
   plan: Plan,
   docs: Doc[],
   port: number,
   adapter?: SourceAdapter,
   events: Event[] = [],
-): Promise<void> {
+): Promise<RuntimeHandle> {
   const engine = await Engine.create(plan, docs, { embedding: createEmbeddingProvider() });
-  const recommender = plan.recommend ? new Recommender(plan, docs, events) : null;
+  let catalog = docs;
+  let recommender = plan.recommend ? new Recommender(plan, catalog, events) : null;
+  let reloading: Promise<CatalogChange> | null = null;
   const limiter = new RateLimiter();
   const sweeper = setInterval(() => limiter.sweep(), RATE_LIMIT_WINDOW_MS);
   sweeper.unref();
@@ -308,7 +325,7 @@ export async function startServer(
             status: 'ok',
             engine: plan.engine,
             irVersion: plan.irVersion,
-            documents: docs.length,
+            documents: catalog.length,
             source: adapter?.describe() ?? plan.source.uri,
           },
           origin,
@@ -349,6 +366,52 @@ export async function startServer(
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/reload') {
+        if (!adapter) {
+          throw new HttpError(404, 'Ovaj server nema izvor iz kog bi ponovo učitao katalog');
+        }
+        if (authToken === null) {
+          // Without a token anyone who can reach the port could make the
+          // process re-read its source in a loop. The endpoint stays shut
+          // rather than being quietly rate-limited into something weaker.
+          throw new HttpError(
+            403,
+            'Reload je dostupan samo kada je postavljen GOSIMPLE_TOKEN',
+          );
+        }
+
+        // The body is refused, not ignored. An ignored body is how a later
+        // change "helpfully" starts accepting a catalogue over the network
+        // and the architectural rule dies without a failing test.
+        const incoming = await readBody(req);
+        if (incoming.trim() !== '') {
+          throw new HttpError(
+            400,
+            'Reload ne prima katalog iz zahteva. Ponovo čita izvor sa kog je server pokrenut.',
+          );
+        }
+
+        // No document ever arrives over the network. The server re-reads the
+        // same source it was started with, so the runtime's rule that data
+        // definitions come from disk and never from a request still holds.
+        // Overlapping requests share one reload instead of racing the index.
+        if (!reloading) {
+          reloading = (async () => {
+            const fresh = await adapter.load();
+            const change = await engine.reload(fresh);
+            catalog = fresh;
+            recommender = plan.recommend ? new Recommender(plan, catalog, events) : null;
+            return change;
+          })().finally(() => {
+            reloading = null;
+          });
+        }
+
+        const change = await reloading;
+        send(res, 200, { status: 'ok', documents: catalog.length, ...change }, origin);
+        return;
+      }
+
       if (req.method === 'POST' && url.pathname === '/content') {
         const text = await readBody(req);
         let parsed: unknown;
@@ -380,37 +443,69 @@ export async function startServer(
   server.headersTimeout = REQUEST_TIMEOUT_MS;
   server.requestTimeout = REQUEST_TIMEOUT_MS;
 
-  // Graceful shutdown: stop accepting connections, then release the source.
-  // A second signal exits immediately, so a wedged connection cannot trap the
-  // process.
+  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
+
+  const address = server.address();
+  const bound = typeof address === 'object' && address ? address.port : port;
+
+  let closed = false;
+  const close = async (): Promise<void> => {
+    if (closed) return;
+    closed = true;
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+    await adapter?.close().catch(() => undefined);
+  };
+
+  return { port: bound, close };
+}
+
+/**
+ * CLI entry: create the runtime and exit the process on SIGINT/SIGTERM.
+ *
+ * A second signal exits immediately, so a wedged connection cannot trap the
+ * process.
+ */
+export async function startServer(
+  plan: Plan,
+  docs: Doc[],
+  port: number,
+  adapter?: SourceAdapter,
+  events: Event[] = [],
+): Promise<RuntimeHandle> {
+  const runtime = await createRuntime(plan, docs, port, adapter, events);
+
+  console.log(`GoSimple runtime "${plan.engine}" sluša na http://127.0.0.1:${runtime.port}`);
+  console.log(`  POST /search    pretraga`);
+  console.log(`  POST /recommend preporuke`);
+  console.log(`  POST /content   analiza teksta`);
+  console.log(
+    process.env.GOSIMPLE_TOKEN
+      ? `  POST /reload    ponovno učitavanje kataloga iz izvora`
+      : `  POST /reload    isključen bez GOSIMPLE_TOKEN`,
+  );
+  console.log(`  GET  /plan      kompajlirani IR plan`);
+  console.log(`  GET  /health    status`);
+  console.log(
+    process.env.GOSIMPLE_TOKEN
+      ? '  autentikacija: Bearer token je uključen'
+      : '  autentikacija: isključena (postavite GOSIMPLE_TOKEN da je uključite)',
+  );
+  if (!(process.env.GOSIMPLE_CORS_ORIGINS ?? '').trim()) {
+    console.log('  CORS: zatvoren (postavite GOSIMPLE_CORS_ORIGINS da otvorite)');
+  }
+
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    if (shuttingDown) {
-      process.exit(1);
-    }
+    if (shuttingDown) process.exit(1);
     shuttingDown = true;
     console.log(`\n[gosimple] ${signal} primljen, zatvaram...`);
-    server.close();
-    await adapter?.close().catch(() => undefined);
+    await runtime.close();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
-  await new Promise<void>((resolve) => server.listen(port, '127.0.0.1', resolve));
-
-  console.log(`GoSimple runtime "${plan.engine}" sluša na http://127.0.0.1:${port}`);
-  console.log(`  POST /search    pretraga`);
-  console.log(`  POST /recommend preporuke`);
-  console.log(`  POST /content   analiza teksta`);
-  console.log(`  GET  /plan      kompajlirani IR plan`);
-  console.log(`  GET  /health    status`);
-  console.log(
-    authToken
-      ? '  autentikacija: Bearer token je uključen'
-      : '  autentikacija: isključena (postavite GOSIMPLE_TOKEN da je uključite)',
-  );
-  if (allowedOrigins.size === 0) {
-    console.log('  CORS: zatvoren (postavite GOSIMPLE_CORS_ORIGINS da otvorite)');
-  }
+  return runtime;
 }

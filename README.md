@@ -286,7 +286,7 @@ export GOSIMPLE_EMBEDDING_BASE_URL=http://localhost:11434/v1
 ## Testovi
 
 ```bash
-npm test        # 232 testa (220 bez baze)
+npm test        # 241 test (229 bez baze)
 npm run typecheck
 ```
 
@@ -348,7 +348,7 @@ Dva koraka su bila kvadratna i više nisu: poređenje opisa radi originalnosti i
 
 Ovo je spisak stvarnih granica, ne roadmap:
 
-- **Razmera.** Indeks je u memoriji. Sto hiljada proizvoda radi (vidi merenja ispod), milion ne. Nema inkrementalnog indeksiranja — izmena kataloga traži restart.
+- **Razmera.** Indeks je u memoriji. Sto hiljada proizvoda radi (vidi merenja ispod), milion ne. Izmena kataloga više ne traži restart: `POST /reload` ponovo čita isti izvor, a indeks se dopunjuje. Telo zahteva se odbija — katalog ne putuje mrežom.
 - **Lokalni embeddinzi nisu značenje.** Podrazumevani provajder se zato i predstavlja kao `lexical-vector`, a ne kao `semantic`: heširani karakterski trigrami hvataju pravopisnu sličnost, pa će „svećica" i „sveća" biti blizu, ali „sijalica" i „rasveta" neće. Za pravo značenje treba `GOSIMPLE_EMBEDDING=openai`, što znači mrežni poziv i trošak.
 - **Jezik.** Normalizacija je podešena za srpski. Drugi jezici će proći kroz cevovod, ali stopwords i korenovanje im neće odgovarati.
 - **Rate limiting je po procesu.** Iza load balancera svaka instanca broji zasebno.

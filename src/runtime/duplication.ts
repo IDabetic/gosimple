@@ -20,6 +20,15 @@
  * are also the easiest case to answer: identical text means overlap 1, no
  * comparison needed. Grouping them first removes the pathological cluster
  * before the index is built.
+ *
+ * The index is incremental, because duplication is the one content signal
+ * that is a property of the catalogue rather than of a document. Adding one
+ * product can change another product's originality, so a shop that edits its
+ * catalogue cannot simply re-analyze the edited row. Rebuilding everything
+ * would cost the full startup time on every change. Instead the index
+ * remembers, for each document, which other document it matched best; when
+ * that partner disappears the score is recomputed, and when a new document
+ * arrives it is offered to everything it overlaps with.
  */
 
 import { stem, tokenizeText } from './text.ts';
@@ -38,9 +47,9 @@ export type DuplicationOptions = {
   /**
    * How many candidate documents to gather before verifying.
    *
-   * Gathering is the only approximate step. Verification below is exact, so
-   * this bounds how much work a document can cause without ever inflating
-   * its score: a missed candidate lowers the result, never raises it.
+   * Gathering is the only approximate step. Verification is exact, so this
+   * bounds how much work a document can cause without ever inflating its
+   * score: a missed candidate lowers the result, never raises it.
    */
   candidateLimit?: number;
 };
@@ -59,121 +68,230 @@ const DEFAULT_CANDIDATE_LIMIT = 48;
  */
 const PER_SHINGLE_SCAN_LIMIT = 256;
 
-/**
- * Highest shingle overlap of each text against any other text in the array.
- *
- * Returns a parallel array: `result[i]` is the duplication score of
- * `texts[i]`, in [0, 1]. Exact for every pair that shares a shingle within
- * the posting budget, which on real data is every pair that shares one.
- */
-export function buildDuplicationScores(
-  texts: string[],
-  options: DuplicationOptions = {},
-): number[] {
-  const candidateLimit = options.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT;
-  const scores = new Array<number>(texts.length).fill(0);
-  if (texts.length < 2) return scores;
+export type DuplicationEntry = { id: string; text: string };
 
-  // --- Collapse exact duplicates ------------------------------------------
-  // Identical text is the common case in a copy-pasted catalogue and the one
-  // that would otherwise dominate the cost. It also needs no comparison.
-  const byText = new Map<string, number[]>();
-  for (let i = 0; i < texts.length; i++) {
-    const key = texts[i]!.trim();
-    const bucket = byText.get(key);
-    if (bucket) bucket.push(i);
-    else byText.set(key, [i]);
+/** The best match found for a document, and how strong it was. */
+type Match = { partner: string | null; score: number };
+
+const NO_MATCH: Match = { partner: null, score: 0 };
+
+export class DuplicationIndex {
+  private readonly candidateLimit: number;
+
+  private texts = new Map<string, string>();
+  private sets = new Map<string, Set<string>>();
+  /** shingle -> ids containing it. A set, so removal is not a linear scan. */
+  private postings = new Map<string, Set<string>>();
+  /** exact text -> ids. Identical documents answer each other for free. */
+  private groups = new Map<string, Set<string>>();
+  private matches = new Map<string, Match>();
+
+  constructor(entries: DuplicationEntry[] = [], options: DuplicationOptions = {}) {
+    this.candidateLimit = options.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT;
+    if (entries.length > 0) this.apply(entries, []);
   }
 
-  /** One index per distinct text; the rest inherit its score. */
-  const representatives: number[] = [];
-  const shingleSets = new Map<number, Set<string>>();
+  get size(): number {
+    return this.texts.size;
+  }
 
-  for (const members of byText.values()) {
-    const representative = members[0]!;
-    const own = shingles(texts[representative]!);
-    shingleSets.set(representative, own);
-    representatives.push(representative);
+  /** Highest overlap this document has with any other, in [0, 1]. */
+  scoreOf(id: string): number {
+    return this.matches.get(id)?.score ?? 0;
+  }
 
-    // Identical texts overlap completely — but only if there is anything to
-    // overlap. A text shorter than one shingle produces no evidence, and
-    // this module does not make claims it cannot support. Two blank
-    // descriptions are not plagiarism, they are two blank descriptions.
-    if (members.length > 1 && own.size > 0) {
-      for (const member of members) scores[member] = 1;
+  /**
+   * Adds, replaces and removes documents, then repairs every score the
+   * change could have altered.
+   *
+   * Batched on purpose. Finding which documents depended on a removed one
+   * costs a pass over the index, and a reload that drops a thousand rows
+   * should pay for that pass once rather than a thousand times.
+   */
+  apply(upserts: DuplicationEntry[], removals: string[] = []): void {
+    /** Documents whose score has to be worked out again from scratch. */
+    const dirty = new Set<string>();
+    /** Exact-text groups that changed size; survivors may lose their 1.0. */
+    const touchedGroups = new Set<string>();
+    const departed = new Set<string>();
+
+    for (const id of removals) {
+      if (this.detach(id, touchedGroups)) departed.add(id);
+    }
+
+    for (const entry of upserts) {
+      // An unchanged document is left alone: re-adding it would make it its
+      // own neighbour's neighbour for no reason and churn the index.
+      if (this.texts.get(entry.id) === entry.text) continue;
+      if (this.texts.has(entry.id)) {
+        this.detach(entry.id, touchedGroups);
+        departed.add(entry.id);
+      }
+      this.attach(entry.id, entry.text, touchedGroups);
+      dirty.add(entry.id);
+    }
+
+    if (departed.size > 0) {
+      // Whoever leaned on a document that is gone has to look again. This is
+      // the one pass over the whole index, and it is why `apply` is batched.
+      for (const [id, match] of this.matches) {
+        if (match.partner !== null && departed.has(match.partner)) dirty.add(id);
+      }
+    }
+
+    for (const key of touchedGroups) {
+      const members = this.groups.get(key);
+      if (!members) continue;
+      // Every member of a group that changed size needs another look. One
+      // that grew just handed its existing members a perfect match; one
+      // that shrank to a single document took that match away. Re-scoring
+      // a group member is cheap — identical text answers itself.
+      for (const id of members) dirty.add(id);
+    }
+
+    for (const id of dirty) {
+      if (this.texts.has(id)) this.matches.set(id, this.computeMatch(id));
+    }
+
+    // A new document can only raise its neighbours' scores, never lower
+    // them, so offering it around is enough — no second recomputation.
+    for (const entry of upserts) {
+      const own = this.sets.get(entry.id);
+      if (!own || own.size === 0) continue;
+      for (const other of this.candidatesFor(entry.id, own)) {
+        const overlap = this.jaccard(own, this.sets.get(other)!);
+        const current = this.matches.get(other) ?? NO_MATCH;
+        if (overlap > current.score) this.matches.set(other, { partner: entry.id, score: overlap });
+      }
     }
   }
 
-  if (representatives.length < 2) return scores;
+  // --- internals ----------------------------------------------------------
 
-  // --- Index the distinct texts -------------------------------------------
-  const sets = representatives.map((index) => shingleSets.get(index)!);
-  const postings = new Map<string, number[]>();
-
-  for (let slot = 0; slot < sets.length; slot++) {
-    for (const shingle of sets[slot]!) {
-      const list = postings.get(shingle);
-      if (list) list.push(slot);
-      else postings.set(shingle, [slot]);
-    }
+  private groupKey(text: string): string {
+    return text.trim();
   }
 
-  // --- Score each distinct text against its overlapping neighbours --------
-  const candidates = new Set<number>();
+  /** Removes a document from every structure. Returns false if it was absent. */
+  private detach(id: string, touchedGroups: Set<string>): boolean {
+    const text = this.texts.get(id);
+    if (text === undefined) return false;
 
-  for (let slot = 0; slot < sets.length; slot++) {
-    const own = sets[slot]!;
-    if (own.size === 0) continue;
+    for (const shingle of this.sets.get(id) ?? []) {
+      const holders = this.postings.get(shingle);
+      if (!holders) continue;
+      holders.delete(id);
+      if (holders.size === 0) this.postings.delete(shingle);
+    }
+
+    const key = this.groupKey(text);
+    const members = this.groups.get(key);
+    if (members) {
+      members.delete(id);
+      touchedGroups.add(key);
+      if (members.size === 0) this.groups.delete(key);
+    }
+
+    this.texts.delete(id);
+    this.sets.delete(id);
+    this.matches.delete(id);
+    return true;
+  }
+
+  private attach(id: string, text: string, touchedGroups: Set<string>): void {
+    const own = shingles(text);
+    this.texts.set(id, text);
+    this.sets.set(id, own);
+
+    for (const shingle of own) {
+      const holders = this.postings.get(shingle);
+      if (holders) holders.add(id);
+      else this.postings.set(shingle, new Set([id]));
+    }
+
+    const key = this.groupKey(text);
+    const members = this.groups.get(key);
+    if (members) members.add(id);
+    else this.groups.set(key, new Set([id]));
+    touchedGroups.add(key);
+  }
+
+  /** Exact Jaccard, iterating the smaller set. */
+  private jaccard(a: Set<string>, b: Set<string>): number {
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let intersection = 0;
+    for (const shingle of small) if (large.has(shingle)) intersection++;
+    const union = a.size + b.size - intersection;
+    return union === 0 ? 0 : intersection / union;
+  }
+
+  /** Documents worth comparing against, gathered rarest shingle first. */
+  private candidatesFor(id: string, own: Set<string>): Set<string> {
+    const found = new Set<string>();
 
     // Rarest shingles first. A shingle shared by half the catalogue says
     // nothing about who copied whom; a shingle shared by two documents says
     // everything. Reading the informative lists first is what lets the walk
     // stop early without losing the answer.
     const ordered = [...own].sort(
-      (a, b) => (postings.get(a)?.length ?? 0) - (postings.get(b)?.length ?? 0),
+      (a, b) => (this.postings.get(a)?.size ?? 0) - (this.postings.get(b)?.size ?? 0),
     );
 
-    candidates.clear();
-
     for (const shingle of ordered) {
-      if (candidates.size >= candidateLimit) break;
-      const list = postings.get(shingle)!;
-      const scan = Math.min(list.length, PER_SHINGLE_SCAN_LIMIT);
-      for (let k = 0; k < scan; k++) {
-        const other = list[k]!;
-        if (other !== slot) candidates.add(other);
+      if (found.size >= this.candidateLimit) break;
+      const holders = this.postings.get(shingle);
+      if (!holders) continue;
+
+      let seen = 0;
+      for (const other of holders) {
+        if (seen++ >= PER_SHINGLE_SCAN_LIMIT) break;
+        if (other !== id) found.add(other);
       }
+    }
+
+    return found;
+  }
+
+  private computeMatch(id: string): Match {
+    const own = this.sets.get(id);
+    if (!own || own.size === 0) return NO_MATCH;
+
+    // Identical text needs no comparison — but only if there is anything to
+    // compare. A text shorter than one shingle produces no evidence, and
+    // this module does not make claims it cannot support. Two blank
+    // descriptions are not plagiarism, they are two blank descriptions.
+    const members = this.groups.get(this.groupKey(this.texts.get(id)!));
+    if (members && members.size > 1) {
+      for (const twin of members) if (twin !== id) return { partner: twin, score: 1 };
     }
 
     // Verify exactly. The index narrowed the field from the whole catalogue
     // to a handful; the number reported is a real Jaccard over real sets,
     // never an estimate.
-    let best = 0;
-    for (const other of candidates) {
-      const theirs = sets[other]!;
-      // Iterating the smaller set keeps the cost at min(|a|, |b|).
-      const [small, large] = own.size <= theirs.size ? [own, theirs] : [theirs, own];
-      let intersection = 0;
-      for (const shingle of small) if (large.has(shingle)) intersection++;
-
-      const union = own.size + theirs.size - intersection;
-      if (union === 0) continue;
-      const jaccard = intersection / union;
-      if (jaccard > best) best = jaccard;
+    let best = NO_MATCH;
+    for (const other of this.candidatesFor(id, own)) {
+      const score = this.jaccard(own, this.sets.get(other)!);
+      if (score > best.score) best = { partner: other, score };
     }
-
-    const index = representatives[slot]!;
-    if (best > scores[index]!) scores[index] = best;
+    return best;
   }
+}
 
-  // --- Propagate representative scores to their groups --------------------
-  for (const members of byText.values()) {
-    if (members.length === 1) continue;
-    const score = scores[members[0]!]!;
-    for (const member of members) scores[member] = score;
-  }
-
-  return scores;
+/**
+ * Highest shingle overlap of each text against any other text in the array.
+ *
+ * Returns a parallel array: `result[i]` is the duplication score of
+ * `texts[i]`, in [0, 1].
+ */
+export function buildDuplicationScores(
+  texts: string[],
+  options: DuplicationOptions = {},
+): number[] {
+  const index = new DuplicationIndex(
+    texts.map((text, i) => ({ id: String(i), text })),
+    options,
+  );
+  return texts.map((_, i) => index.scoreOf(String(i)));
 }
 
 /**

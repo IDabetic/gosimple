@@ -30,6 +30,7 @@ Posledica za vas: `.gs` fajlovi se tretiraju kao izvorni kod, ne kao korisnički
 | Gramatika `where` uslova | `sources/where.ts` | uslov se parsira i SQL se ponovo sastavlja; literali odlaze kao vezani parametri |
 | Provera SQL identifikatora | `sources/index.ts` | allowlista `^[A-Za-z_][A-Za-z0-9_]*$`, provereno pri kompajliranju i ponovo pri sastavljanju upita |
 | Redakcija putanja i kredencijala | `sources/index.ts` | `/health` prikazuje ime fajla ili host, nikada punu putanju ni lozinku |
+| Reload čita samo svoj izvor | `server.ts` | `POST /reload` odbija telo zahteva, zahteva Bearer token, nikada ne prima katalog preko mreže |
 
 ## Ispravljena ranjivost: injekcija kroz `where` uslov
 
@@ -61,7 +62,7 @@ Napad se izvršava protiv prave baze pri svakom CI pokretanju (`tests/postgres.i
 [ HTTP ulaz ] — nepoverljiv, validira se u celosti pre nego što dođe do runtime-a
 ```
 
-Runtime tokom obrade upita ne otvara fajlove, ne šalje mrežne zahteve i ne izvršava ništa iz ulaza. Katalog se učitava jednom, pri pokretanju.
+Runtime tokom obrade upita ne otvara fajlove, ne šalje mrežne zahteve i ne izvršava ništa iz ulaza. Katalog se učitava iz izvora pri pokretanju, i ponovo samo na `POST /reload` — koji ne prima dokumente iz zahteva, nego čita isti izvor. Bez `GOSIMPLE_TOKEN` ta putanja ne postoji.
 
 ## Poznata ograničenja ove verzije
 

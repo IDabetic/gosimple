@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildDuplicationScores,
   buildDuplicationScoresNaive,
+  DuplicationIndex,
   shingles,
 } from '../src/runtime/duplication.ts';
 
@@ -178,5 +179,146 @@ describe('šinglovi', () => {
     const a = shingles('solarne svećice za baštu');
     const b = shingles('solarne svećica za baštu');
     assert.deepEqual([...a], [...b]);
+  });
+});
+
+describe('inkrementalne izmene', () => {
+  /** Mulberry32 — isti niz operacija pri svakom pokretanju. */
+  function rng(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const FRAZE = [
+    'solarne baštenske svećice led sa treperavim plamenom',
+    'iridijumske svećice za benzinske motore razmak elektroda',
+    'savršen izbor za vaš dom vrhunski kvalitet po najpovoljnijoj ceni',
+    'akumulatorska bušilica sa dve baterije i koferom za nošenje',
+    'frižider sa dve komore energetska klasa i velika zapremina',
+    'kočione pločice prednje sa senzorom habanja i garancijom',
+  ];
+
+  function tekst(random: () => number): string {
+    const a = FRAZE[Math.floor(random() * FRAZE.length)]!;
+    // Polovina tekstova je čista kopija fraze, što pravi grupe identičnih
+    // opisa — slučaj koji indeks rešava posebnim putem.
+    if (random() < 0.5) return a;
+    const b = FRAZE[Math.floor(random() * FRAZE.length)]!;
+    return `${a} ${b.split(' ').slice(0, 1 + Math.floor(random() * 5)).join(' ')}`;
+  }
+
+  /**
+   * Suština inkrementalnog indeksa je da posle izmene kaže isto što bi rekao
+   * da je sve izgrađeno iz početka. Ovaj test to proverava posle svake
+   * pojedinačne operacije, pa greška ne može da se sakrije iza proseka.
+   */
+  test('posle svake izmene rezultat je isti kao da je sve izgrađeno iz početka', () => {
+    const random = rng(20261014);
+    const index = new DuplicationIndex();
+    const stanje = new Map<string, string>();
+
+    const proveri = (korak: number) => {
+      const ids = [...stanje.keys()];
+      const ocekivano = buildDuplicationScoresNaive(ids.map((id) => stanje.get(id)!));
+      ids.forEach((id, i) => {
+        assert.ok(
+          Math.abs(index.scoreOf(id) - ocekivano[i]!) < 1e-9,
+          `korak ${korak}, dokument ${id}: inkrementalno ${index.scoreOf(id)}, iz početka ${ocekivano[i]}`,
+        );
+      });
+      assert.equal(index.size, stanje.size, `korak ${korak}: indeks i stanje se ne slažu po broju`);
+    };
+
+    let sledeci = 0;
+    for (let korak = 0; korak < 150; korak++) {
+      const ids = [...stanje.keys()];
+      const potez = random();
+
+      if (ids.length < 4 || potez < 0.5) {
+        const id = `d${sledeci++}`;
+        const t = tekst(random);
+        stanje.set(id, t);
+        index.apply([{ id, text: t }], []);
+      } else if (potez < 0.75) {
+        const id = ids[Math.floor(random() * ids.length)]!;
+        const t = tekst(random);
+        stanje.set(id, t);
+        index.apply([{ id, text: t }], []);
+      } else {
+        const id = ids[Math.floor(random() * ids.length)]!;
+        stanje.delete(id);
+        index.apply([], [id]);
+      }
+
+      proveri(korak);
+    }
+
+    assert.ok(stanje.size > 10, `test je ostao na ${stanje.size} dokumenata, premalo da bi išta dokazao`);
+  });
+
+  test('grupna izmena daje isto što i niz pojedinačnih', () => {
+    const pocetak = FRAZE.map((text, i) => ({ id: `p${i}`, text }));
+    const dodaci = [
+      { id: 'n1', text: FRAZE[0]! },
+      { id: 'n2', text: `${FRAZE[1]!} dodatak` },
+    ];
+
+    const grupno = new DuplicationIndex(pocetak);
+    grupno.apply(dodaci, ['p3', 'p4']);
+
+    const pojedinacno = new DuplicationIndex(pocetak);
+    pojedinacno.apply([], ['p3']);
+    pojedinacno.apply([], ['p4']);
+    for (const d of dodaci) pojedinacno.apply([d], []);
+
+    for (const id of ['p0', 'p1', 'p2', 'p5', 'n1', 'n2']) {
+      assert.ok(
+        Math.abs(grupno.scoreOf(id) - pojedinacno.scoreOf(id)) < 1e-9,
+        `${id}: grupno ${grupno.scoreOf(id)}, pojedinačno ${pojedinacno.scoreOf(id)}`,
+      );
+    }
+  });
+
+  test('brisanje blizanca obara ocenu onome ko je ostao', () => {
+    const text = 'potpuno isti opis proizvoda u oba slučaja reč po reč';
+    const index = new DuplicationIndex([
+      { id: 'a', text },
+      { id: 'b', text },
+    ]);
+    assert.equal(index.scoreOf('a'), 1);
+
+    index.apply([], ['b']);
+    assert.equal(index.scoreOf('a'), 0, 'a je ostao sam, pa više nema sa čim da se poklapa');
+  });
+
+  test('ponovni upis istog teksta ništa ne menja', () => {
+    const entries = FRAZE.map((text, i) => ({ id: `p${i}`, text }));
+    const index = new DuplicationIndex(entries);
+    const pre = entries.map((e) => index.scoreOf(e.id));
+
+    index.apply(entries, []);
+
+    entries.forEach((e, i) => assert.equal(index.scoreOf(e.id), pre[i]));
+    assert.equal(index.size, entries.length);
+  });
+
+  test('brisanje nepostojećeg dokumenta ne ruši indeks', () => {
+    const index = new DuplicationIndex([{ id: 'a', text: FRAZE[0]! }]);
+    index.apply([], ['nema-me']);
+    assert.equal(index.size, 1);
+  });
+
+  test('dodavanje kopije podiže ocenu postojećem dokumentu', () => {
+    const text = 'jedinstven opis koji se ni sa čim ne poklapa u katalogu';
+    const index = new DuplicationIndex([{ id: 'a', text }]);
+    assert.equal(index.scoreOf('a'), 0);
+
+    index.apply([{ id: 'b', text }], []);
+    assert.equal(index.scoreOf('a'), 1, 'postojeći dokument nije primetio da je stigla kopija');
   });
 });

@@ -194,6 +194,22 @@ export class GoSimple {
     return this.request('GET', '/health', undefined, signal);
   }
 
+  /**
+   * Asks the runtime to re-read the source it was started with.
+   *
+   * The catalogue never travels in this request. A body is rejected on the
+   * server; sending one is a client bug, not a way to push products in.
+   */
+  reload(signal?: AbortSignal): Promise<{
+    status: string;
+    documents: number;
+    added: number;
+    updated: number;
+    removed: number;
+  }> {
+    return this.request('POST', '/reload', undefined, signal);
+  }
+
   /** The compiled IR plan currently served by the runtime. */
   plan(signal?: AbortSignal): Promise<unknown> {
     return this.request('GET', '/plan', undefined, signal);

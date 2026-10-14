@@ -8,7 +8,8 @@
  */
 
 import { CONTEXTUAL_SIGNALS, type Plan, type RankSignal } from '../ir.ts';
-import { analyzeCorpus, type ContentReport } from './content.ts';
+import { analyzeContent, type ContentReport } from './content.ts';
+import { DuplicationIndex } from './duplication.ts';
 import { cosineSimilarity, type EmbeddingProvider } from './embed.ts';
 import { resolveIntent, seasonOf, type IntentResolution } from './intent.ts';
 import { overlapScore, overlapScoreSets, stem, tokenizeText } from './text.ts';
@@ -98,6 +99,27 @@ function docText(doc: Doc): string {
   return [doc.title, doc.title, doc.description ?? '', (doc.tags ?? []).join(' ')].join(' ');
 }
 
+/** What a {@link Engine.reload} actually did. */
+export type CatalogChange = {
+  added: number;
+  updated: number;
+  removed: number;
+};
+
+/**
+ * Whether a reload can skip this document.
+ *
+ * Compares the whole document rather than a list of fields. An enumeration
+ * here would have to be extended every time `Doc` grows, and the failure
+ * mode of forgetting is silent: the index keeps serving the old value and
+ * nothing in the output says so. Serializing is a little wasteful and
+ * cannot be wrong in that direction.
+ */
+function sameDoc(current: Doc | undefined, incoming: Doc): boolean {
+  if (!current) return false;
+  return JSON.stringify(current) === JSON.stringify(incoming);
+}
+
 export type EngineOptions = {
   /** Required only when the program uses `match { semantic }`. */
   embedding?: EmbeddingProvider;
@@ -116,13 +138,20 @@ const EMPTY_TOKENS: ReadonlySet<string> = new Set<string>();
 
 export class Engine {
   private plan: Plan;
-  private docs: Doc[];
+  private docsById = new Map<string, Doc>();
   private docTokens = new Map<string, Set<string>>();
-  /** token -> positions in `docs`. Lets the match phase skip the catalogue. */
-  private tokenPostings = new Map<string, number[]>();
+  /**
+   * token -> document ids. Lets the match phase skip the catalogue.
+   *
+   * Keyed by id rather than by position so that removing one product does
+   * not shift every posting after it. The catalogue of a live shop changes.
+   */
+  private tokenPostings = new Map<string, Set<string>>();
   private scanAllDocuments: boolean;
-  /** category -> positions in `docs`, for the `category` match field. */
-  private categoryPostings = new Map<string, number[]>();
+  /** category -> document ids, for the `category` match field. */
+  private categoryPostings = new Map<string, Set<string>>();
+  /** Corpus-relative duplication, maintained across catalogue changes. */
+  private duplication: DuplicationIndex | null = null;
   private contentReports = new Map<string, ContentReport>();
   private maxViews = 1;
   private maxPurchases = 1;
@@ -155,31 +184,129 @@ export class Engine {
       );
     }
     this.plan = plan;
-    this.docs = docs;
 
-    docs.forEach((doc, index) => {
+    // Content analysis is corpus-relative: a document's originality depends
+    // on its neighbours, so it cannot be computed per document on demand.
+    if (plan.content || plan.search?.rank.some((r) => r.signal === 'content_quality' || r.signal === 'originality')) {
+      this.duplication = new DuplicationIndex();
+    }
+
+    this.ingest(docs, []);
+  }
+
+  /**
+   * Applies catalogue changes without rebuilding the engine.
+   *
+   * `upserts` are added or replaced by id, `removals` are dropped. Returns
+   * what actually changed, which is not the same as what was asked for: an
+   * upsert of an unchanged document is a no-op, and removing something that
+   * was never there is not an error.
+   *
+   * Vectors are the caller's concern via {@link reload}; this method keeps
+   * everything that can be derived synchronously.
+   */
+  private ingest(upserts: Doc[], removals: string[]): { added: number; updated: number; removed: number } {
+    let added = 0;
+    let updated = 0;
+    let removed = 0;
+
+    for (const id of removals) {
+      if (this.forget(id)) removed++;
+    }
+
+    const contentChanges: Array<{ id: string; text: string }> = [];
+
+    for (const doc of upserts) {
+      if (this.docsById.has(doc.id)) {
+        this.forget(doc.id);
+        updated++;
+      } else {
+        added++;
+      }
+
+      this.docsById.set(doc.id, doc);
+
       const tokens = new Set(tokenizeText(docText(doc)).map(stem));
       this.docTokens.set(doc.id, tokens);
 
       for (const token of tokens) {
         const postings = this.tokenPostings.get(token);
-        if (postings) postings.push(index);
-        else this.tokenPostings.set(token, [index]);
+        if (postings) postings.add(doc.id);
+        else this.tokenPostings.set(token, new Set([doc.id]));
       }
 
       const byCategory = this.categoryPostings.get(doc.category);
-      if (byCategory) byCategory.push(index);
-      else this.categoryPostings.set(doc.category, [index]);
+      if (byCategory) byCategory.add(doc.id);
+      else this.categoryPostings.set(doc.category, new Set([doc.id]));
 
+      if (this.duplication) contentChanges.push({ id: doc.id, text: doc.description ?? doc.title });
+    }
+
+    if (this.duplication) {
+      this.duplication.apply(contentChanges, removals);
+      // Duplication is the only part of the content report that depends on
+      // the rest of the catalogue, and `apply` may have changed it for
+      // documents nobody touched. Re-deriving the reports whose number moved
+      // is cheaper than re-reading every description.
+      this.refreshContentReports();
+    }
+
+    this.refreshMaxima();
+
+    return { added, updated, removed };
+  }
+
+  /** Drops one document from every index. Returns false if it was absent. */
+  private forget(id: string): boolean {
+    const doc = this.docsById.get(id);
+    if (!doc) return false;
+
+    for (const token of this.docTokens.get(id) ?? []) {
+      const postings = this.tokenPostings.get(token);
+      if (!postings) continue;
+      postings.delete(id);
+      if (postings.size === 0) this.tokenPostings.delete(token);
+    }
+
+    const byCategory = this.categoryPostings.get(doc.category);
+    if (byCategory) {
+      byCategory.delete(id);
+      if (byCategory.size === 0) this.categoryPostings.delete(doc.category);
+    }
+
+    this.docsById.delete(id);
+    this.docTokens.delete(id);
+    this.contentReports.delete(id);
+    this.docVectors.delete(id);
+    return true;
+  }
+
+  private refreshContentReports(): void {
+    if (!this.duplication) return;
+    for (const doc of this.docsById.values()) {
+      const text = doc.description ?? doc.title;
+      const score = this.duplication.scoreOf(doc.id);
+      const current = this.contentReports.get(doc.id);
+      // Only the duplication input can have moved; everything else in the
+      // report is a function of the text alone.
+      if (current && Math.abs(1 - current.originality - score) < 1e-9) continue;
+      this.contentReports.set(doc.id, analyzeContent(text, score));
+    }
+  }
+
+  /**
+   * Recomputes popularity denominators.
+   *
+   * Maxima can fall as well as rise, so they cannot be folded in one
+   * document at a time: removing the single most-viewed product has to
+   * rescale popularity for everything else.
+   */
+  private refreshMaxima(): void {
+    this.maxViews = 1;
+    this.maxPurchases = 1;
+    for (const doc of this.docsById.values()) {
       this.maxViews = Math.max(this.maxViews, doc.views ?? 0);
       this.maxPurchases = Math.max(this.maxPurchases, doc.purchases ?? 0);
-    });
-
-    // Content analysis is corpus-relative (duplication needs neighbours), so
-    // it is computed once up front rather than per query.
-    if (plan.content || plan.search?.rank.some((r) => r.signal === 'content_quality' || r.signal === 'originality')) {
-      const reports = analyzeCorpus(docs.map((d) => d.description ?? d.title));
-      docs.forEach((doc, index) => this.contentReports.set(doc.id, reports[index]!));
     }
   }
 
@@ -195,33 +322,90 @@ export class Engine {
    * having it, so an enabled semantic clause falls back to a full scan.
    */
   private candidateDocs(queryTokens: ReadonlySet<string>, intentCategories: Set<string>): Doc[] {
-    if (this.scanAllDocuments) return this.docs;
+    if (this.scanAllDocuments) return this.allDocs();
 
     const search = this.plan.search!;
     const weightOf = (field: string): number =>
       search.match.find((m) => m.field === field)?.weight ?? 0;
 
-    if (weightOf('semantic') > 0) return this.docs;
+    if (weightOf('semantic') > 0) return this.allDocs();
 
-    const picked = new Set<number>();
+    const picked = new Set<string>();
 
     if (weightOf('keywords') > 0) {
       for (const token of queryTokens) {
         const postings = this.tokenPostings.get(token);
-        if (postings) for (const index of postings) picked.add(index);
+        if (postings) for (const id of postings) picked.add(id);
       }
     }
 
     if (weightOf('category') > 0) {
       for (const category of intentCategories) {
         const postings = this.categoryPostings.get(category);
-        if (postings) for (const index of postings) picked.add(index);
+        if (postings) for (const id of postings) picked.add(id);
       }
     }
 
-    // Catalogue order, so the candidate list is identical to what the full
-    // scan would have produced rather than merely equivalent as a set.
-    return [...picked].sort((a, b) => a - b).map((index) => this.docs[index]!);
+    // Sorted by id so the candidate list does not depend on the order in
+    // which products happened to arrive. Two engines holding the same
+    // catalogue answer identically whether it was loaded at once or built
+    // up by reloads.
+    return [...picked].sort().map((id) => this.docsById.get(id)!);
+  }
+
+  /**
+   * Replaces the catalogue with a freshly loaded one, in place.
+   *
+   * The whole list is passed, not a patch, because that is what a source
+   * can actually produce: a JSON file or a SQL query returns the catalogue
+   * as it is now, and nobody keeps a changelog of it. The diff is worked
+   * out here, so a shop that edits three prices pays for three documents
+   * rather than for a restart.
+   *
+   * Everything derived incrementally is exact. Duplication, the one signal
+   * that depends on the rest of the catalogue, is maintained by an index
+   * that re-scores whichever documents the change could have affected.
+   */
+  async reload(docs: Doc[]): Promise<CatalogChange> {
+    const incoming = new Map(docs.map((doc) => [doc.id, doc]));
+
+    if (incoming.size !== docs.length) {
+      const seen = new Set<string>();
+      const duplicate = docs.find((doc) => !seen.add(doc.id))?.id;
+      throw new Error(
+        `Katalog sadrži dva dokumenta sa istim id "${duplicate}". ` +
+          `Id mora da bude jedinstven, inače jedan proizvod tiho pregazi drugi.`,
+      );
+    }
+
+    const removals = [...this.docsById.keys()].filter((id) => !incoming.has(id));
+    const upserts = docs.filter((doc) => !sameDoc(this.docsById.get(doc.id), doc));
+
+    const change = this.ingest(upserts, removals);
+
+    // Vectors are the one derived value that needs the network, so they are
+    // refreshed only for documents whose text actually moved.
+    if (this.usesSemantic() && this.embedding) {
+      const stale = upserts.filter((doc) => !this.docVectors.has(doc.id));
+      if (stale.length > 0) {
+        const vectors = await this.embedding.embed(stale.map((doc) => docText(doc)));
+        stale.forEach((doc, index) => this.docVectors.set(doc.id, vectors[index]!));
+      }
+    }
+
+    // Cached query vectors are not touched: they depend on the query text
+    // and the provider, not on what is in the catalogue.
+    return change;
+  }
+
+  /** Every document, in insertion order. */
+  private allDocs(): Doc[] {
+    return [...this.docsById.values()];
+  }
+
+  /** Number of documents currently indexed. */
+  get corpusSize(): number {
+    return this.docsById.size;
   }
 
   /** Content report for one document, or null if content analysis is not enabled. */
@@ -252,15 +436,16 @@ export class Engine {
   private async buildVectorIndex(): Promise<void> {
     if (!this.usesSemantic() || !this.embedding) return;
 
-    const texts = this.docs.map((doc) => docText(doc));
+    const all = this.allDocs();
+    const texts = all.map((doc) => docText(doc));
     const vectors = await this.embedding.embed(texts);
 
-    if (vectors.length !== this.docs.length) {
+    if (vectors.length !== all.length) {
       throw new Error(
-        `Embedding provajder je vratio ${vectors.length} vektora za ${this.docs.length} dokumenata.`,
+        `Embedding provajder je vratio ${vectors.length} vektora za ${all.length} dokumenata.`,
       );
     }
-    this.docs.forEach((doc, index) => this.docVectors.set(doc.id, vectors[index]!));
+    all.forEach((doc, index) => this.docVectors.set(doc.id, vectors[index]!));
   }
 
   private async embedQuery(query: string): Promise<Float32Array | null> {
@@ -497,7 +682,7 @@ export class Engine {
       clarify,
       hits,
       stats: {
-        corpusSize: this.docs.length,
+        corpusSize: this.docsById.size,
         retrieved,
         filteredByIntent,
         filteredByAvailability,

@@ -48,6 +48,17 @@ provera bila moguća.
 - `npm run catalog` — deterministički generator kataloga (Zipf-ova raspodela
   popularnosti, namerno dvosmislen pojam „svećice", klasteri prepisanog
   marketinškog teksta).
+- **Inkrementalni indeks.** `Engine.reload(docs)` dopunjuje katalog bez
+  restarta. Originalnost, koja zavisi od suseda, se održava indeksom koji
+  preračunava samo pogođene dokumente. Posle svake izmene rezultat je isti
+  kao da je engine podignut iz nule — to proverava 150 nasumičnih operacija
+  i deset scenarija nad pravim katalogom.
+
+  HTTP `POST /reload` samo ponovo čita izvor sa kog je server pokrenut.
+  Telo zahteva se **odbija**, ne ignoriše: ignorisanje je kako kasnija
+  izmena „od pomoći" počne da prima katalog preko mreže. Endpoint je
+  zatvoren dok nije postavljen `GOSIMPLE_TOKEN`. Dva istovremena zahteva
+  dele jedno učitavanje.
 
 ### Ispravljeno
 
