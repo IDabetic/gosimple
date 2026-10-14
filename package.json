@@ -1,0 +1,58 @@
+{
+  "name": "gosimple-lang",
+  "version": "0.1.0",
+  "description": "GoSimple — declarative language for search, ranking and recommendations with intent protection",
+  "keywords": [
+    "search",
+    "ranking",
+    "recommendations",
+    "relevance",
+    "dsl",
+    "compiler",
+    "serbian"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gosimple-lang/gosimple.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gosimple-lang/gosimple/issues"
+  },
+  "type": "module",
+  "bin": {
+    "gs": "./src/cli.ts"
+  },
+  "files": [
+    "src",
+    "examples",
+    "sdk",
+    "SPEC.md",
+    "SECURITY.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "gs": "node src/cli.ts",
+    "serve": "node src/server.ts",
+    "test": "node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "peerDependencies": {
+    "pg": "^8.11.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "typescript": "^5.8.0"
+  }
+}

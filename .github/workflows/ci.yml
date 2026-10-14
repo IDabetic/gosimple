@@ -1,0 +1,192 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 22.18 is the floor: that is where unflagged TypeScript type
+        # stripping landed on the 22.x line.
+        # 24 is current LTS. Both are tested so we notice if we drift
+        # into syntax only the newer runtime accepts.
+        node: ['22.18', '24']
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        exclude:
+          - { os: macos-latest, node: '22.18' }
+          - { os: windows-latest, node: '22.18' }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+  determinism:
+    name: determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+
+      # The same plan, catalog, query and `now` must produce identical output
+      # down to the last decimal, with wall-clock timing stripped out. This is
+      # a language guarantee, not an implementation detail, so it gets its own
+      # job rather than hiding inside the test suite.
+      - name: Search output is reproducible
+        run: |
+          for run in a b; do
+            node src/cli.ts run examples/prodavnica.gs \
+              -q "svećice za Subaru" --now 2026-12-15T10:00:00Z --json \
+              | node scripts/strip-timing.mjs > "/tmp/search-$run.json"
+          done
+          diff /tmp/search-a.json /tmp/search-b.json
+
+      - name: Recommendations are reproducible
+        run: |
+          for run in a b; do
+            node src/cli.ts recommend examples/prodavnica.gs \
+              -u u1 --now 2026-12-15T10:00:00Z --json \
+              | node scripts/strip-timing.mjs > "/tmp/rec-$run.json"
+          done
+          diff /tmp/rec-a.json /tmp/rec-b.json
+
+      - name: Compiled plan is stable
+        run: |
+          node src/cli.ts plan examples/prodavnica.gs > /tmp/p1.json
+          node src/cli.ts plan examples/prodavnica.gs > /tmp/p2.json
+          diff /tmp/p1.json /tmp/p2.json
+
+  intent-protection:
+    name: intent protection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+
+      # The reason this language exists. If season ever outranks a locked
+      # intent, the build fails loudly rather than shipping a regression
+      # that only shows up in somebody's December traffic.
+      - name: Locked intent is never overridden by season
+        run: |
+          node src/cli.ts run examples/prodavnica.gs \
+            -q "svećice za Subaru" --now 2026-12-15T10:00:00Z --json \
+            | node -e '
+              const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              if (r.season !== "zima") throw new Error("expected winter, got " + r.season);
+              if (!r.intent.locked) throw new Error("intent was not locked");
+              const bleed = r.hits.filter((h) => h.category === "praznicna-dekoracija");
+              if (bleed.length > 0) {
+                throw new Error("season overrode locked intent: " +
+                  bleed.map((h) => h.title).join(", "));
+              }
+              console.log("ok: " + r.hits.length + " hits, zero seasonal bleed");
+            '
+
+  postgres:
+    name: postgres integration
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: gstest
+          POSTGRES_PASSWORD: gstest
+          POSTGRES_DB: shop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+
+      # These tests skip without a database, so without this job the SQL
+      # adapter would be covered only by assertions about generated SQL —
+      # and the injection that got through the first implementation looked
+      # perfectly fine as a string.
+      - name: Run integration tests against a real database
+        env:
+          GOSIMPLE_TEST_PG: postgres://gstest:gstest@127.0.0.1:5432/shop
+        run: node --test tests/postgres.integration.test.ts
+
+      - name: Example schema loads and the engine reads it
+        env:
+          PGPASSWORD: gstest
+        run: |
+          psql -h 127.0.0.1 -U gstest -d shop -f examples/schema.sql
+          export GOSIMPLE_PG="gstest:gstest@127.0.0.1:5432/shop"
+          node src/cli.ts run examples/prodavnica-pg.gs \
+            -q "svećice za Subaru" --now 2026-12-15T10:00:00Z --json \
+            | node -e '
+              const r = JSON.parse(require("fs").readFileSync(0, "utf8"));
+              if (!r.intent.locked) throw new Error("intent was not locked over SQL");
+              if (r.hits.some((h) => h.category === "praznicna-dekoracija")) {
+                throw new Error("season overrode locked intent over SQL");
+              }
+              console.log("ok: " + r.hits.length + " hits from postgres");
+            '
+
+  security:
+    name: security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --ignore-scripts
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=moderate
+
+      # The runtime has no production dependencies by design. If that ever
+      # changes it should be a deliberate, reviewed decision.
+      - name: Runtime dependency count is zero
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const deps = Object.keys(pkg.dependencies || {});
+            if (deps.length > 0) {
+              throw new Error("unexpected runtime dependencies: " + deps.join(", "));
+            }
+            console.log("ok: zero runtime dependencies");
+          '
