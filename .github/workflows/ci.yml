@@ -113,6 +113,25 @@ jobs:
               console.log("ok: " + r.hits.length + " hits, zero seasonal bleed");
             '
 
+      # The check above covers one query. The golden set covers the whole
+      # set of promises the shipped plan makes, and `gs eval` exits non-zero
+      # the moment any forbidden document reaches the results.
+      - name: Shipped plan honours every forbidden document in the golden set
+        run: node src/cli.ts eval examples/prodavnica.gs --golden examples/zlatni-skup.json
+
+      # And the inverse: if deleting `protect intent` stopped breaking
+      # anything, the golden set has quietly stopped measuring the feature
+      # this language was built for.
+      - name: Golden set still detects the damage when protection is removed
+        run: |
+          if node src/cli.ts eval examples/prodavnica-bez-zastite.gs \
+               --golden examples/zlatni-skup.json > /dev/null 2>&1; then
+            echo "Plan bez \`protect intent\` je prošao zlatni skup."
+            echo "Skup je prestao da meri ono zbog čega postoji."
+            exit 1
+          fi
+          echo "ok: zlatni skup i dalje hvata uklonjenu zaštitu namere"
+
   postgres:
     name: postgres integration
     runs-on: ubuntu-latest

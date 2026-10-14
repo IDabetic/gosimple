@@ -24,3 +24,8 @@ export const pluralPravilo = (n: number): string => plural(n, 'pravilo', 'pravil
 export const pluralUpozorenje = (n: number): string => plural(n, 'upozorenje', 'upozorenja', 'upozorenja');
 export const pluralArtikal = (n: number): string => plural(n, 'artikal', 'artikla', 'artikala');
 export const pluralProizvod = (n: number): string => plural(n, 'proizvod', 'proizvoda', 'proizvoda');
+
+/** 1 prekršaj / 2 prekršaja / 5 prekršaja */
+export function pluralPrekrsaj(count: number): string {
+  return plural(count, 'prekršaj', 'prekršaja', 'prekršaja');
+}

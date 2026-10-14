@@ -6,6 +6,7 @@
  * gs plan    <file>              print the compiled IR plan
  * gs run     <file> -q "upit"    execute a search and show ranked results
  * gs content <file>              content intelligence report for the catalog
+ * gs eval    <file> --golden s.json   score the plan against a golden set
  * gs serve   <file>              start the HTTP runtime
  */
 
@@ -18,13 +19,29 @@ import { Engine, type Doc } from './runtime/execute.ts';
 import { createSource, type SourceAdapter } from './sources/index.ts';
 import { createEmbeddingProvider } from './runtime/embed.ts';
 import { parseEvents, Recommender, type Event } from './runtime/recommend.ts';
-import { pluralArtikal, pluralGreska, pluralKategorija, pluralPravilo, pluralUpozorenje } from './plural.ts';
+import {
+  pluralArtikal,
+  pluralGreska,
+  pluralKategorija,
+  pluralPravilo,
+  pluralPrekrsaj,
+  pluralUpozorenje,
+} from './plural.ts';
+import {
+  evaluate,
+  parseGoldenSet,
+  GoldenSetError,
+  type EvalReport,
+  type GoldenQuery,
+  type QueryResult,
+} from './eval.ts';
 import type { Plan } from './ir.ts';
 
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const RED = '\x1b[31m';
 const CYAN = '\x1b[36m';
 const RESET = '\x1b[0m';
 
@@ -40,6 +57,8 @@ type Args = {
   interests: string[];
   user: string | null;
   seed: string[];
+  golden: string | null;
+  compare: string | null;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -55,6 +74,8 @@ function parseArgs(argv: string[]): Args {
     interests: [],
     user: null,
     seed: [],
+    golden: null,
+    compare: null,
   };
 
   const rest = argv.slice(1);
@@ -88,6 +109,12 @@ function parseArgs(argv: string[]): Args {
         break;
       case '--seed':
         args.seed = (rest[++i] ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+        break;
+      case '--golden':
+        args.golden = rest[++i] ?? null;
+        break;
+      case '--compare':
+        args.compare = rest[++i] ?? null;
         break;
       case '--json':
         args.json = true;
@@ -140,6 +167,130 @@ function bar(value: number, width = 20): string {
   return '█'.repeat(filled) + '·'.repeat(width - filled);
 }
 
+
+/** Compiles and runs one plan over a golden set. */
+async function evaluatePlan(file: string, set: Parameters<typeof evaluate>[0]): Promise<EvalReport> {
+  const { plan, docs } = await loadProgram(file);
+  const engine = await Engine.create(plan, docs, { embedding: createEmbeddingProvider() });
+
+  return evaluate(set, async (golden: GoldenQuery) => {
+    const request: Parameters<Engine['search']>[0] = { query: golden.query };
+    if (golden.now) request.now = golden.now;
+    if (golden.season) request.season = golden.season;
+    return engine.search(request);
+  });
+}
+
+/** Formats a metric, or a dash when the query could not define it. */
+function metric(value: number | null): string {
+  return value === null ? '   —  ' : value.toFixed(3);
+}
+
+function printEvalReport(report: EvalReport): void {
+  console.log(`${BOLD}Zlatni skup${RESET}  ${report.set}  ${DIM}(k = ${report.k})${RESET}`);
+  console.log('');
+
+  for (const q of report.queries) {
+    const broken = q.violations.length > 0;
+    const mark = broken ? `${RED}✗${RESET}` : `${GREEN}✓${RESET}`;
+    console.log(`  ${mark} ${BOLD}"${q.query}"${RESET}`);
+    console.log(
+      `      ${DIM}NDCG ${metric(q.ndcg)}   preciznost ${metric(q.precision)}   ` +
+        `odziv ${metric(q.recall)}   RR ${metric(q.reciprocalRank)}${RESET}`,
+    );
+    if (broken) {
+      console.log(`      ${RED}zabranjeno u rezultatima: ${q.violations.join(', ')}${RESET}`);
+      if (q.note) console.log(`      ${DIM}${q.note}${RESET}`);
+    }
+  }
+
+  console.log('');
+  console.log(
+    `${BOLD}Ukupno${RESET}  NDCG ${metric(report.ndcg)}   preciznost ${metric(report.precision)}   ` +
+      `odziv ${metric(report.recall)}   MRR ${metric(report.mrr)}`,
+  );
+
+  if (report.violations > 0) {
+    const count = report.violations;
+    console.log(
+      `${RED}✗ ${count} ${pluralPrekrsaj(count)} zabrane.${RESET} ` +
+        `${DIM}Zabranjen dokument u rezultatima nije loš skor nego prekršeno obećanje.${RESET}`,
+    );
+  } else {
+    console.log(`${GREEN}✓ nijedan zabranjen dokument nije izašao.${RESET}`);
+  }
+}
+
+/**
+ * Shows what a change did, query by query.
+ *
+ * The aggregate alone hides the case that matters most: a change that lifts
+ * the average while quietly ruining two queries. Those two are the ones a
+ * reviewer needs to see.
+ */
+function printComparison(before: EvalReport, after: EvalReport, beforeName: string, afterName: string): void {
+  console.log(`${BOLD}Zlatni skup${RESET}  ${after.set}  ${DIM}(k = ${after.k})${RESET}`);
+  console.log(`${DIM}pre:  ${beforeName}${RESET}`);
+  console.log(`${DIM}posle:${RESET} ${afterName}`);
+  console.log('');
+
+  const delta = (a: number | null, b: number | null): string => {
+    if (a === null || b === null) return `${DIM}   —  ${RESET}`;
+    const d = b - a;
+    if (Math.abs(d) < 0.0005) return `${DIM} =0.000${RESET}`;
+    const color = d > 0 ? GREEN : RED;
+    return `${color}${d > 0 ? '+' : '−'}${Math.abs(d).toFixed(3)}${RESET}`;
+  };
+
+  let improved = 0;
+  let worsened = 0;
+
+  for (let i = 0; i < after.queries.length; i++) {
+    const a = before.queries[i]!;
+    const b = after.queries[i]!;
+    const changed =
+      a.ndcg !== b.ndcg ||
+      a.violations.length !== b.violations.length ||
+      a.reciprocalRank !== b.reciprocalRank;
+
+    if (b.ndcg !== null && a.ndcg !== null) {
+      if (b.ndcg > a.ndcg + 0.0005) improved++;
+      else if (b.ndcg < a.ndcg - 0.0005) worsened++;
+    }
+
+    if (!changed) continue;
+
+    console.log(`  ${BOLD}"${b.query}"${RESET}`);
+    console.log(
+      `      ${DIM}NDCG${RESET} ${metric(a.ndcg)} → ${metric(b.ndcg)}  ${delta(a.ndcg, b.ndcg)}` +
+        `   ${DIM}RR${RESET} ${metric(a.reciprocalRank)} → ${metric(b.reciprocalRank)}`,
+    );
+
+    const newlyBroken = b.violations.filter((id) => !a.violations.includes(id));
+    const fixed = a.violations.filter((id) => !b.violations.includes(id));
+    if (newlyBroken.length > 0) {
+      console.log(`      ${RED}novo zabranjeno: ${newlyBroken.join(', ')}${RESET}`);
+      if (b.note) console.log(`      ${DIM}${b.note}${RESET}`);
+    }
+    if (fixed.length > 0) console.log(`      ${GREEN}više ne izlazi: ${fixed.join(', ')}${RESET}`);
+  }
+
+  console.log('');
+  console.log(
+    `${BOLD}Ukupno${RESET}  ${DIM}NDCG${RESET} ${metric(before.ndcg)} → ${metric(after.ndcg)}  ` +
+      `${delta(before.ndcg, after.ndcg)}   ${DIM}MRR${RESET} ${metric(before.mrr)} → ${metric(after.mrr)}  ` +
+      `${delta(before.mrr, after.mrr)}`,
+  );
+  console.log(
+    `${DIM}poboljšano ${improved}, pogoršano ${worsened}, ` +
+      `prekršaja ${before.violations} → ${after.violations}${RESET}`,
+  );
+
+  if (after.violations > before.violations) {
+    console.log(`${RED}✗ Izmena pušta zabranjene dokumente koje prethodni plan nije.${RESET}`);
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
@@ -152,6 +303,7 @@ ${BOLD}Komande${RESET}
   gs run       <fajl.gs> -q "upit"        izvršavanje pretrage
   gs recommend <fajl.gs> -u <korisnik>    preporuke za korisnika
   gs content   <fajl.gs>                  analiza sadržaja kataloga
+  gs eval      <fajl.gs> --golden s.json  ocena rangiranja nad zlatnim skupom
   gs serve     <fajl.gs> [-p 7777]        HTTP runtime za Laravel/Next/Vue
 
 ${BOLD}Opcije${RESET}
@@ -162,6 +314,8 @@ ${BOLD}Opcije${RESET}
       --now <ISO datum>    fiksira "sada" radi ponovljivih testova
       --budget <broj>      budžet korisnika
       --interests <a,b>    interesovanja korisnika
+      --golden <fajl>      zlatni skup upita za "gs eval"
+      --compare <fajl.gs>  drugi plan, za poređenje rangiranja
       --json               sirov JSON izlaz
 
 ${BOLD}Okruženje${RESET}
@@ -353,6 +507,43 @@ ${BOLD}Okruženje${RESET}
         }
         console.log('');
       }
+      break;
+    }
+
+    case 'eval': {
+      if (!args.golden) {
+        console.error('Nedostaje zlatni skup. Koristite --golden <fajl.json>.');
+        process.exitCode = 1;
+        return;
+      }
+
+      const goldenPath = resolve(args.golden);
+      let set;
+      try {
+        set = parseGoldenSet(JSON.parse(await readFile(goldenPath, 'utf8')), args.golden);
+      } catch (err) {
+        if (err instanceof GoldenSetError) {
+          console.error(err.message);
+          process.exitCode = 1;
+          return;
+        }
+        throw err;
+      }
+
+      const report = await evaluatePlan(args.file, set);
+      const baseline = args.compare ? await evaluatePlan(args.compare, set) : null;
+
+      if (args.json) {
+        console.log(JSON.stringify(baseline ? { current: report, baseline } : report, null, 2));
+      } else if (baseline) {
+        printComparison(baseline, report, args.compare!, args.file);
+      } else {
+        printEvalReport(report);
+      }
+
+      // A forbidden document in the results is not a low score, it is a
+      // broken promise. CI should stop on it.
+      if (report.violations > 0) process.exitCode = 1;
       break;
     }
 

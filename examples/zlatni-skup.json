@@ -1,0 +1,80 @@
+{
+  "name": "prodavnica — osnovni skup",
+  "k": 5,
+  "queries": [
+    {
+      "query": "svećice za Subaru",
+      "now": "2026-12-15T10:00:00Z",
+      "note": "Zaštita namere. Kontekst 'Subaru' zaključava auto-delove, pa decembar ne sme da ubaci novogodišnje artikle. Ovo je jedini razlog zbog kog ovaj jezik postoji.",
+      "relevant": {
+        "ad-001": 3,
+        "ad-002": 3,
+        "ad-003": 1
+      },
+      "forbidden": ["pd-001", "pd-002", "pd-003"]
+    },
+    {
+      "query": "svećice za baštu",
+      "now": "2026-07-15T10:00:00Z",
+      "note": "Kontekst 'bašta' zaključava baštensku rasvetu i leti i zimi.",
+      "relevant": {
+        "br-001": 3,
+        "br-003": 2,
+        "br-004": 2
+      },
+      "forbidden": ["pd-001", "pd-002"]
+    },
+    {
+      "query": "svećice za baštu",
+      "now": "2026-12-15T10:00:00Z",
+      "note": "Isti upit u decembru. Zaključana namera mora da izdrži i kada sezona vuče na drugu stranu — ovo je test koji razlikuje zaštitu namere od običnog sezonskog busta.",
+      "relevant": {
+        "br-001": 3,
+        "br-003": 2,
+        "br-004": 2
+      },
+      "forbidden": ["pd-001", "pd-002"]
+    },
+    {
+      "query": "svećice za jelku",
+      "now": "2026-12-15T10:00:00Z",
+      "note": "Kontekst 'jelka' zaključava prazničnu dekoraciju.",
+      "relevant": {
+        "pd-002": 3,
+        "pd-001": 1
+      },
+      "forbidden": ["ad-001", "ad-002"]
+    },
+    {
+      "query": "svećice",
+      "now": "2026-12-15T10:00:00Z",
+      "note": "Bez konteksta upit je dvosmislen. Ovde se ne traži određena kategorija nego da se sve tri ponude — zato ovaj upit nema zabranjene dokumente.",
+      "relevant": {
+        "ad-001": 2,
+        "br-001": 2,
+        "pd-002": 2
+      }
+    },
+    {
+      "query": "kočione pločice",
+      "note": "Jedini odgovarajući proizvod (ad-005) je rasprodat. Rasprodato se ne prikazuje, pa ovaj upit namerno nema nijedan relevantan rezultat — on proverava da nedostupan artikal ne iscuri nazad u rezultate.",
+      "forbidden": ["ad-005"],
+      "relevant": {}
+    },
+    {
+      "query": "sijalica E27",
+      "note": "Tačan proizvod mora da bude prvi. Baštenska rasveta sme da se pojavi u repu liste — to je ponuda, ne greška.",
+      "relevant": {
+        "kr-001": 3,
+        "kr-002": 1
+      }
+    },
+    {
+      "query": "filter ulja",
+      "note": "Auto-delovi bez dvosmislenosti.",
+      "relevant": {
+        "ad-004": 3
+      }
+    }
+  ]
+}

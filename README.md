@@ -286,11 +286,45 @@ export GOSIMPLE_EMBEDDING_BASE_URL=http://localhost:11434/v1
 ## Testovi
 
 ```bash
-npm test        # 213 testova (201 bez baze)
+npm test        # 232 testa (220 bez baze)
 npm run typecheck
 ```
 
 Najvažniji test u celom projektu je regresioni test koji proverava da „svećice za Subaru" u decembru ne vrati nijedan novogodišnji artikal. Ako taj test ikada padne, jezik je izgubio jedini razlog zbog kog postoji.
+
+## Ocena rangiranja
+
+Izmena rangiranja se ne brani utiskom nego brojkama:
+
+```bash
+gs eval examples/prodavnica.gs --golden examples/zlatni-skup.json
+```
+
+Zlatni skup je lista upita sa ljudskom presudom: koji dokumenti **treba** da
+izađu i koji **ne smeju**. Druga polovina je ovde važnija. Jezik postoji zato
+što kupac koji u decembru traži svećice za Subaru ne sme da dobije
+novogodišnje lampice, a to je tvrdnja o tome šta mora da izostane. Prosečne
+mere relevantnosti je ne umeju iskazati.
+
+Evo iste prodavnice sa uklonjenim `protect intent`, izmerene:
+
+```
+Ukupno  NDCG 0.966 → 0.983  +0.018   MRR 1.000 → 1.000   =0.000
+poboljšano 1, pogoršano 0, prekršaja 3 → 0
+```
+
+Prosek se pomerio za 0,018 — unutar šuma. Da se kvalitet ocenjivao samo njime,
+brisanje zaštite namere prošlo bi kao bezazlena izmena. Broj prekršenih
+zabrana ide sa 3 na 0 i to je jedini broj koji je ovde rekao istinu. Zato
+`gs eval` vraća grešku čim jedan zabranjen dokument izađe, bez obzira na
+prosek, i zato CI pokreće i obrnutu proveru: ako plan bez `protect intent`
+ikada prođe zlatni skup, skup je prestao da meri ono zbog čega postoji.
+
+Poređenje dva plana, upit po upit:
+
+```bash
+gs eval novi.gs --golden zlatni-skup.json --compare stari.gs
+```
 
 ## Merenja
 

@@ -25,6 +25,24 @@ provera bila moguća.
 
 ### Dodato
 
+- **`gs eval`** — ocena rangiranja nad zlatnim skupom upita: NDCG@k sa
+  stepenovanim ocenama, preciznost, odziv, MRR, i poređenje dva plana upit
+  po upitu (`--compare`). Do sada se izmena rangiranja mogla braniti samo
+  utiskom, iako `CONTRIBUTING.md` traži brojke.
+
+  Zlatni skup uz svaki upit nosi i spisak dokumenata koji **ne smeju** da
+  izađu. To nije dodatak nego suština: zaštita namere je tvrdnja o tome šta
+  mora da izostane, a prosečne mere relevantnosti je ne mogu iskazati. Nad
+  isporučenim primerom uklanjanje `protect intent` pomera prosečan NDCG za
+  0,018, dok broj prekršenih zabrana ide sa 0 na 3. `gs eval` zato vraća
+  izlazni kod različit od nule čim jedan zabranjen dokument izađe.
+
+- `examples/zlatni-skup.json` i `examples/prodavnica-bez-zastite.gs` —
+  drugi postoji da bi šteta od uklonjene zaštite namere mogla da se izmeri,
+  a ne samo opiše.
+- Dva nova CI koraka: isporučeni plan mora da prođe zlatni skup, a plan bez
+  `protect intent` mora da padne. Drugi čuva od toga da skup neprimetno
+  prestane da meri ono zbog čega postoji.
 - `npm run benchmark` — sintetički katalozi od 1 000 do 100 000 proizvoda,
   p50/p95/p99 i podizanje prijavljeni odvojeno.
 - `npm run catalog` — deterministički generator kataloga (Zipf-ova raspodela

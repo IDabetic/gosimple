@@ -328,3 +328,51 @@ Jedino polje koje se razlikuje između dva izvršavanja je `stats.durationMs`, j
 Signali koji zavise od vremena (`freshness`, `seasonal_relevance`) čitaju `now` iz zahteva, nikada sistemski sat, kada je prosleđen. Pri jednakim skorovima presuđuje ID, pa ni redosled ne zavisi od redosleda obilaska.
 
 Bez ove osobine promene u rangiranju nije moguće recenzirati niti reprodukovati regresiju.
+
+## 7. Ocena rangiranja
+
+Zlatni skup je JSON fajl sa upitima i ljudskom presudom uz svaki.
+
+```json
+{
+  "name": "prodavnica — osnovni skup",
+  "k": 5,
+  "queries": [
+    {
+      "query": "svećice za Subaru",
+      "now": "2026-12-15T10:00:00Z",
+      "relevant": { "ad-001": 3, "ad-002": 3 },
+      "forbidden": ["pd-001", "pd-002"],
+      "note": "zašto je ovaj upit u skupu"
+    }
+  ]
+}
+```
+
+| Polje | Značenje |
+|---|---|
+| `k` | odsecanje za sve mere; podrazumevano 10 |
+| `now` | fiksiran sat, da sezonsko očekivanje važi i sledećeg meseca |
+| `relevant` | id → ocena; veće je bolje, 0 znači nebitno |
+| `forbidden` | dokumenti koji **ne smeju** da se pojave u prvih `k` |
+| `note` | razlog, prikazuje se kada upit nazaduje |
+
+Mere: NDCG@k sa stepenovanim dobitkom (`2^ocena − 1`), preciznost@k,
+odziv@k i MRR. Preciznost se deli brojem stvarno prikazanih rezultata, ne
+sa `k`: prodavnica koja je imala samo tri odgovarajuća artikla ne sme da
+bude kažnjena zato što katalog nije veći. Upit bez ocenjenih dokumenata
+nema definisan NDCG i **izostavlja se iz proseka** umesto da u njega uđe
+kao nula.
+
+`forbidden` nije kozmetika nego razlog zbog kog ovaj odeljak postoji.
+Zaštita namere je tvrdnja o tome šta mora da **izostane**, a prosečne mere
+relevantnosti to ne umeju da iskažu. Nad isporučenim primerom uklanjanje
+`protect intent` pomera prosečan NDCG za 0,018 — unutar šuma — dok broj
+prekršenih zabrana ide sa 0 na 3. Zato `gs eval` vraća izlazni kod različit
+od nule čim jedan zabranjen dokument izađe, bez obzira na to kako prosek
+izgleda.
+
+```bash
+gs eval program.gs --golden skup.json
+gs eval novi.gs --golden skup.json --compare stari.gs
+```

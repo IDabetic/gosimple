@@ -148,6 +148,9 @@ Svaka izmena ponašanja ide sa testom. Konkretno:
 - Novi rang signal → test koji pokazuje da menja redosled.
 - Nova dijagnostika → test koji proverava kod *i* tekst predloga.
 - Ispravka baga → test koji pada pre ispravke.
+- Optimizacija → test koji poredi brzi put sa sporim i traži **identičan**
+  izlaz. Brzina koja menja rezultate nije optimizacija nego regresija koju
+  niko neće primetiti dok se ne vidi na prometu.
 
 Nazivi testova su na srpskom i opisuju ponašanje, ne implementaciju. Umesto
 `test('resolveIntent vraća locked=true')` piše se
@@ -160,7 +163,20 @@ Kada takav test padne, odmah se zna šta je korisnik izgubio.
 - `npm test` i `npm run typecheck` prolaze.
 - Opis sadrži *zašto*, ne samo *šta*. „Dodao sam X" nije opis; „korisnici koji
   traže Y dobijaju Z iako su tražili W" jeste.
-- Ako menjate ponašanje rangiranja, priložite izlaz `gs run` pre i posle.
+- Ako menjate ponašanje rangiranja, priložite izlaz:
+
+  ```bash
+  gs eval moj-program.gs --golden zlatni-skup.json --compare stari-program.gs
+  ```
+
+  Prosek nije dovoljan. Izmena koja podigne prosečan NDCG a pokvari dva
+  upita je i dalje šteta, pa poređenje prikazuje svaki upit koji se pomerio
+  i razlog zbog kog je u skupu. Ako je ijedan zabranjen dokument izašao,
+  izmena ne prolazi bez obzira na prosek.
+
+  Nemate zlatni skup za svoju izmenu? Napravite ga. Nekoliko upita sa
+  iskrenom presudom vredi više od duge rasprave o tome koji poredak
+  „deluje bolje".
 
 ## Verzionisanje
 
