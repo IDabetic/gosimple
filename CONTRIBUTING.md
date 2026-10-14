@@ -6,7 +6,7 @@ Hvala na interesovanju. Ovaj dokument opisuje kako se radi na projektu i,
 ## Brzi start
 
 ```bash
-git clone https://github.com/gosimple-lang/gosimple
+git clone https://github.com/IDabetic/gosimple
 cd gosimple
 npm install          # samo TypeScript i tipovi; runtime nema zavisnosti
 npm test             # 192 testa

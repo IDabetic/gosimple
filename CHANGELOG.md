@@ -150,4 +150,4 @@ Namerno nabrojana, da ne biste otkrivali u produkciji. Puna lista je u
 - Lokalni embeddinzi hvataju pravopisnu sličnost, ne značenje.
 - Normalizacija teksta je podešena za srpski.
 
-[0.1.0]: https://github.com/gosimple-lang/gosimple/releases/tag/v0.1.0
+[0.1.0]: https://github.com/IDabetic/gosimple/releases/tag/v0.1.0

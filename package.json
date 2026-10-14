@@ -14,10 +14,10 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gosimple-lang/gosimple.git"
+    "url": "git+https://github.com/IDabetic/gosimple.git"
   },
   "bugs": {
-    "url": "https://github.com/gosimple-lang/gosimple/issues"
+    "url": "https://github.com/IDabetic/gosimple/issues"
   },
   "type": "module",
   "bin": {

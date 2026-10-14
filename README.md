@@ -1,5 +1,10 @@
 # GoSimple
 
+[![CI](https://github.com/IDabetic/gosimple/actions/workflows/ci.yml/badge.svg)](https://github.com/IDabetic/gosimple/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.18-green.svg)](package.json)
+[![Zavisnosti](https://img.shields.io/badge/runtime%20zavisnosti-0-green.svg)](package.json)
+
 Deklarativni jezik za pretragu, rangiranje i preporuke, sa jednom osobinom koju postojeći alati nemaju kao prvorazredni koncept: **zaštitu namere**.
 
 ```
