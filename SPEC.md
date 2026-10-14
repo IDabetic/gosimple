@@ -198,7 +198,7 @@ Ako su svi deklarisani faktori zavisni od istorije, kompajler upozorava (`GS2109
 
 Ovo je ista zaštita kao `protect intent`, samo na drugoj putanji: tamo kontekst upita zaključava nameru, ovde je istorija korisnika štiti.
 
-**Istraživanje.** `explore <udeo>` rezervisе deo liste za kategorije van istorije korisnika. Bez tog ventila sistem preporučuje ono što je korisnik gledao, korisnik klikne, i to pojačava sledeću preporuku — povratna sprega koja se sama zatvara.
+**Istraživanje.** `explore <udeo>` rezerviše deo liste za kategorije van istorije korisnika. Bez tog ventila sistem preporučuje ono što je korisnik gledao, korisnik klikne, i to pojačava sledeću preporuku — povratna sprega koja se sama zatvara.
 
 **Odbijanja.** Događaji tipa `dismissals` se poštuju i kada nisu navedeni u `learn from`, i proveravaju se **pre** provere „već viđeno" (korisnik gotovo uvek pogleda artikal pre nego što ga odbije, pa bi obrnut redosled svako odbijanje pripisao pasivnom pregledu).
 

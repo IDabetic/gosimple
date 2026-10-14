@@ -348,7 +348,7 @@ Dva koraka su bila kvadratna i više nisu: poređenje opisa radi originalnosti i
 
 ## Šta v0.2 NE radi
 
-Ovo je spisak stvarnih granica, ne roadmap:
+Ovo je spisak stvarnih granica, ne roadmap (plan je u [ROADMAP.md](ROADMAP.md)):
 
 - **Razmera.** Indeks je u memoriji. Sto hiljada proizvoda radi (vidi merenja iznad), milion ne. Izmena kataloga više ne traži restart: `POST /reload` ponovo čita isti izvor, a indeks se dopunjuje. Telo zahteva se odbija — katalog ne putuje mrežom.
 - **Reload je inkrementalan samo za pretragu.** Preporučivač se na reload-u gradi iz nule, a događaji (`events`) ostaju oni učitani pri pokretanju; nove kupovine ulaze tek posle restarta.
