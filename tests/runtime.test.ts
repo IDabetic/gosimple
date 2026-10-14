@@ -8,7 +8,7 @@ import { parse } from '../src/parser.ts';
 import { compile } from '../src/compile.ts';
 import { Engine, type Doc } from '../src/runtime/execute.ts';
 import { normalize, stem, tokenizeText, overlapScore } from '../src/runtime/text.ts';
-import { analyzeContent, buildCorpusShingles } from '../src/runtime/content.ts';
+import { analyzeContent } from '../src/runtime/content.ts';
 import { seasonOf } from '../src/runtime/intent.ts';
 import { LocalEmbedding } from '../src/runtime/embed.ts';
 
@@ -283,7 +283,7 @@ describe('analiza sadržaja', () => {
   });
 
   test('kratak tekst daje nisku pouzdanost umesto lažne presude', async () => {
-    const report = analyzeContent('Crvena stolica.', []);
+    const report = analyzeContent('Crvena stolica.');
     assert.ok(
       report.templateLikeness.confidence < 0.2,
       `pouzdanost ${report.templateLikeness.confidence} je previsoka za tri reči`,
@@ -293,7 +293,6 @@ describe('analiza sadržaja', () => {
   test('analiza nikada ne tvrdi autorstvo, samo iznosi dokaze', async () => {
     const report = analyzeContent(
       'Kvalitetno rešenje. Vrhunski materijali. Moderan dizajn. Pouzdan rad. Idealan izbor.',
-      buildCorpusShingles(['nepovezan tekst o nečemu drugom']),
     );
     assert.ok(report.templateLikeness.score > 0);
     for (const evidence of report.templateLikeness.evidence) {
@@ -303,7 +302,7 @@ describe('analiza sadržaja', () => {
   });
 
   test('prazan tekst ne ruši analizu', async () => {
-    const report = analyzeContent('', []);
+    const report = analyzeContent('');
     assert.equal(report.features.tokenCount, 0);
     assert.equal(report.templateLikeness.confidence, 0);
   });

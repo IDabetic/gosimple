@@ -36,7 +36,9 @@
     "gs": "node src/cli.ts",
     "serve": "node src/server.ts",
     "test": "node --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "catalog": "node scripts/generate-catalog.mjs",
+    "benchmark": "node --expose-gc scripts/benchmark.mjs"
   },
   "engines": {
     "node": ">=22.18.0"

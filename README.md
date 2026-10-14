@@ -286,17 +286,35 @@ export GOSIMPLE_EMBEDDING_BASE_URL=http://localhost:11434/v1
 ## Testovi
 
 ```bash
-npm test        # 192 testa (180 bez baze)
+npm test        # 213 testova (201 bez baze)
 npm run typecheck
 ```
 
 Najvažniji test u celom projektu je regresioni test koji proverava da „svećice za Subaru" u decembru ne vrati nijedan novogodišnji artikal. Ako taj test ikada padne, jezik je izgubio jedini razlog zbog kog postoji.
 
+## Merenja
+
+```bash
+npm run benchmark
+```
+
+Sintetički katalog, jedan Apple Silicon, Node 25, sedam upita, 200 ponavljanja po veličini:
+
+| proizvoda | podizanje | p50 | p95 | p99 | memorija |
+|---|---|---|---|---|---|
+| 1 000 | 83 ms | 0,74 ms | 3,2 ms | 9,6 ms | 15 MB |
+| 10 000 | 1,3 s | 3,5 ms | 8,0 ms | 9,8 ms | 104 MB |
+| 100 000 | 20,7 s | 43 ms | 96 ms | 195 ms | 428 MB |
+
+Podizanje i upit se prijavljuju odvojeno zato što se razlikuju za tri reda veličine, pa bi jedan zbirni broj krio ono što zapravo boli. Podizanje se plaća jednom pri pokretanju; p95 je ono što kupac oseti.
+
+Dva koraka su bila kvadratna i više nisu: poređenje opisa radi originalnosti i prolazak kroz ceo katalog pri poklapanju. Na 10 000 proizvoda podizanje je bilo 29,4 s, sada je 1,3 s; 100 000 ranije nije završavalo uopšte. Nijedan od ta dva popravka ne menja rezultate — i jedan i drugi imaju test koji poredi brzi put sa sporim i traži identičan izlaz.
+
 ## Šta v0.1 NE radi
 
 Ovo je spisak stvarnih granica, ne roadmap:
 
-- **Razmera.** Indeks je u memoriji i pretraga je linearna po katalogu. Desetine hiljada dokumenata su u redu; milioni nisu. Nema ni inkrementalnog indeksiranja — izmena kataloga traži restart.
+- **Razmera.** Indeks je u memoriji. Sto hiljada proizvoda radi (vidi merenja ispod), milion ne. Nema inkrementalnog indeksiranja — izmena kataloga traži restart.
 - **Lokalni embeddinzi nisu značenje.** Podrazumevani provajder se zato i predstavlja kao `lexical-vector`, a ne kao `semantic`: heširani karakterski trigrami hvataju pravopisnu sličnost, pa će „svećica" i „sveća" biti blizu, ali „sijalica" i „rasveta" neće. Za pravo značenje treba `GOSIMPLE_EMBEDDING=openai`, što znači mrežni poziv i trošak.
 - **Jezik.** Normalizacija je podešena za srpski. Drugi jezici će proći kroz cevovod, ali stopwords i korenovanje im neće odgovarati.
 - **Rate limiting je po procesu.** Iza load balancera svaka instanca broji zasebno.

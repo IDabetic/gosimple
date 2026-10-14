@@ -96,11 +96,24 @@ export function stemTokens(input: string): string[] {
  * Used as the lexical relevance component.
  */
 export function overlapScore(queryTokens: string[], docTokens: string[]): number {
-  if (queryTokens.length === 0) return 0;
-  const doc = new Set(docTokens);
+  return overlapScoreSets(new Set(queryTokens), new Set(docTokens));
+}
+
+/**
+ * Same measure over sets the caller already holds.
+ *
+ * The engine keeps a token set per document and one per query, so the array
+ * form above would rebuild both on every document of every query. At a
+ * hundred thousand products that allocation dominated the query.
+ */
+export function overlapScoreSets(
+  queryTokens: ReadonlySet<string>,
+  docTokens: ReadonlySet<string>,
+): number {
+  if (queryTokens.size === 0) return 0;
   let hits = 0;
-  for (const token of new Set(queryTokens)) {
-    if (doc.has(token)) hits++;
+  for (const token of queryTokens) {
+    if (docTokens.has(token)) hits++;
   }
-  return hits / new Set(queryTokens).size;
+  return hits / queryTokens.size;
 }

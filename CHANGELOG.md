@@ -3,6 +3,40 @@
 Format prati [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 verzionisanje je [semantičko](https://semver.org/lang/sr/).
 
+## [Neobjavljeno]
+
+### Promenjeno
+
+- **Podizanje engine-a više nije kvadratno.** Originalnost se računala
+  poređenjem svakog opisa sa svakim, pa je katalog od 10 000 proizvoda
+  trošio 29,4 s, a 100 000 nije završavalo. Sada se identični tekstovi prvo
+  grupišu, a za ostale invertovani indeks nad šinglovima bira samo one
+  dokumente koji zaista dele neki šingl. Podizanje na 10 000 je 1,3 s, na
+  100 000 je 20,7 s.
+- **Match faza više ne prolazi kroz ceo katalog.** Kandidati se uzimaju iz
+  invertovanog indeksa `term → pozicije` i `kategorija → pozicije`. p50 na
+  100 000 proizvoda je pao sa 169 ms na 43 ms, p95 sa 497 ms na 96 ms.
+
+Nijedna od ove dve izmene ne menja rezultate pretrage. Oba brza puta imaju
+test koji ih poredi sa sporom, očiglednom implementacijom i traži identičan
+izlaz (`tests/duplication.test.ts`, `tests/match-index.test.ts`), a
+`Engine` ima opciju `scanAllDocuments` koja postoji isključivo da bi ta
+provera bila moguća.
+
+### Dodato
+
+- `npm run benchmark` — sintetički katalozi od 1 000 do 100 000 proizvoda,
+  p50/p95/p99 i podizanje prijavljeni odvojeno.
+- `npm run catalog` — deterministički generator kataloga (Zipf-ova raspodela
+  popularnosti, namerno dvosmislen pojam „svećice", klasteri prepisanog
+  marketinškog teksta).
+
+### Ispravljeno
+
+- Dva identična prazna opisa više ne dobijaju duplikaciju 1. Tekst kraći od
+  jednog šingla ne daje nikakav dokaz, a modul za sadržaj ne iznosi tvrdnje
+  koje ne može da potkrepi.
+
 ## [0.1.0] — 2026-10-14
 
 Prvo javno izdanje. Jezik je upotrebljiv od početka do kraja: program se

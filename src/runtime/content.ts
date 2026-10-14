@@ -12,6 +12,7 @@
  */
 
 import { normalize, stem, tokenizeText } from './text.ts';
+import { buildDuplicationScores } from './duplication.ts';
 
 export type ContentFeatures = {
   /** Variance in sentence length. Human prose is bursty; templates are flat. */
@@ -67,28 +68,11 @@ function splitSentences(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-/** Word shingles used for near-duplicate detection. */
-function shingles(text: string, size = 4): Set<string> {
-  const tokens = tokenizeText(text).map(stem);
-  const out = new Set<string>();
-  for (let i = 0; i + size <= tokens.length; i++) {
-    out.add(tokens.slice(i, i + size).join(' '));
-  }
-  return out;
-}
-
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 || b.size === 0) return 0;
-  let intersection = 0;
-  for (const item of a) if (b.has(item)) intersection++;
-  return intersection / (a.size + b.size - intersection);
-}
-
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-export function extractFeatures(text: string, corpusShingles: Array<Set<string>> = []): ContentFeatures {
+export function extractFeatures(text: string, duplication = 0): ContentFeatures {
   const sentences = splitSentences(text);
   const tokens = tokenizeText(text);
   const tokenCount = tokens.length;
@@ -116,14 +100,6 @@ export function extractFeatures(text: string, corpusShingles: Array<Set<string>>
   const unique = new Set(tokens.map(stem)).size;
   const lexicalDiversity = tokenCount === 0 ? 0 : clamp01(unique / Math.sqrt(Math.max(1, tokenCount)) / 3);
 
-  // Duplication against the corpus.
-  const own = shingles(text);
-  let duplication = 0;
-  for (const other of corpusShingles) {
-    if (other === own) continue;
-    duplication = Math.max(duplication, jaccard(own, other));
-  }
-
   return {
     burstiness,
     specificity,
@@ -135,8 +111,16 @@ export function extractFeatures(text: string, corpusShingles: Array<Set<string>>
   };
 }
 
-export function analyzeContent(text: string, corpusShingles: Array<Set<string>> = []): ContentReport {
-  const features = extractFeatures(text, corpusShingles);
+/**
+ * Analyzes one text.
+ *
+ * `duplication` is supplied by the caller rather than computed here, because
+ * it is a property of the text's relationship to the rest of the catalogue,
+ * not of the text itself. Computing it per call meant comparing every
+ * document with every other one; see runtime/duplication.ts.
+ */
+export function analyzeContent(text: string, duplication = 0): ContentReport {
+  const features = extractFeatures(text, clamp01(duplication));
   const evidence: Evidence[] = [];
 
   // Each contribution is bounded so no single feature can dominate the score.
@@ -205,7 +189,14 @@ export function analyzeContent(text: string, corpusShingles: Array<Set<string>> 
   };
 }
 
-/** Precomputes corpus shingles once so per-document duplication is a set comparison. */
-export function buildCorpusShingles(texts: string[]): Array<Set<string>> {
-  return texts.map((t) => shingles(t));
+/**
+ * Analyzes a whole catalogue, computing cross-document duplication once.
+ *
+ * This is the entry point callers should use: analyzing documents one at a
+ * time cannot see duplication at all, and analyzing them in a loop against
+ * the full corpus is quadratic.
+ */
+export function analyzeCorpus(texts: string[]): ContentReport[] {
+  const duplication = buildDuplicationScores(texts);
+  return texts.map((text, index) => analyzeContent(text, duplication[index]));
 }

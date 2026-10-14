@@ -121,6 +121,19 @@ Za `semantic` postoje dva provajdera i odgovor uvek prijavljuje koji je bio akti
 
 Razlika je imenovana namerno. Lokalni provajder ne radi mrežne pozive i ništa ne košta, ali nazvati ga „semantičkim" značilo bi obećati razumevanje koje nema.
 
+Match faza ne prolazi kroz ceo katalog. Runtime drži invertovani indeks
+`term → pozicije` i `kategorija → pozicije`, pa kandidate uzima kao uniju
+lista za tokene upita i za kategorije razrešene namere. Ovo je **sužavanje,
+a ne aproksimacija**: match vrednost veću od nule može da donese samo
+`keywords` (traži zajednički token) ili `category` (traži pripadnost
+kandidatima namere), pa dokument van obe unije ionako ne bi prošao prag.
+Izuzetak je `semantic`, koji po definiciji može da poveže upit sa
+dokumentom bez zajedničke reči; kada je taj signal uključen, faza se vraća
+na pun prolaz.
+
+Tvrdnja o jednakosti se proverava, ne pretpostavlja. `tests/match-index.test.ts`
+pokreće oba puta nad istim katalogom i zahteva identičan odgovor.
+
 ### 3.5 Rank signali
 
 Svi vraćaju vrednost u `[0, 1]`.
@@ -139,6 +152,22 @@ Svi vraćaju vrednost u `[0, 1]`.
 | `price_fit` | 1 unutar budžeta, linearno do 0 na dvostrukom budžetu |
 
 Konačni skor je `Σ(signal × težina) / Σ(težina)`, pa je uvek u `[0, 1]`. Pri jednakim skorovima presuđuje ID, što izvršavanje čini determinističkim.
+
+`originality` meri poklapanje opisa sa ostatkom kataloga preko Žakarove
+mere nad šinglovima od četiri reči. Poređenje svakog sa svakim je kvadratno
+i na 100 000 proizvoda neupotrebljivo, pa runtime prvo grupiše tekstove
+koji su identični (njihovo poklapanje je 1 bez ijednog poređenja), zatim
+preko invertovanog indeksa nad šinglovima nalazi samo one dokumente koji
+zaista dele neki šingl, i tek nad tom šačicom računa **tačnu** meru.
+
+Jedini približan korak je biranje kandidata: dokument čiji su baš svi
+šinglovi rasprostranjeni kroz katalog može da dobije odsečen spisak
+kandidata. To se dešava jedino unutar velikog klastera sličnog teksta, gde
+su članovi ionako zamenjivi. Smer greške je određen — rezultat sme da bude
+**niži** od tačnog, nikada viši, jer se svaki prijavljeni broj računa nad
+stvarnim skupovima. Pošten opis zato ne može da bude lažno optužen za
+prepisivanje. `tests/duplication.test.ts` upoređuje brzi put sa poređenjem
+svih sa svima i traži da se poklope.
 
 ### 3.6 Diverzifikacija
 

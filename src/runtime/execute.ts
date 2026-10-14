@@ -8,10 +8,10 @@
  */
 
 import { CONTEXTUAL_SIGNALS, type Plan, type RankSignal } from '../ir.ts';
-import { analyzeContent, buildCorpusShingles, type ContentReport } from './content.ts';
+import { analyzeCorpus, type ContentReport } from './content.ts';
 import { cosineSimilarity, type EmbeddingProvider } from './embed.ts';
 import { resolveIntent, seasonOf, type IntentResolution } from './intent.ts';
-import { overlapScore, stem, tokenizeText } from './text.ts';
+import { overlapScore, overlapScoreSets, stem, tokenizeText } from './text.ts';
 
 export type Doc = {
   id: string;
@@ -103,12 +103,26 @@ export type EngineOptions = {
   embedding?: EmbeddingProvider;
   /** Upper bound on cached query vectors. */
   queryCacheSize?: number;
+  /**
+   * Scans every document in the match phase instead of using the postings
+   * index. The index is supposed to produce exactly the same candidates, and
+   * this switch exists so the test suite can prove it rather than assume it.
+   */
+  scanAllDocuments?: boolean;
 };
+
+/** Shared empty set; a document with no tokens still needs a lookup target. */
+const EMPTY_TOKENS: ReadonlySet<string> = new Set<string>();
 
 export class Engine {
   private plan: Plan;
   private docs: Doc[];
-  private docTokens = new Map<string, string[]>();
+  private docTokens = new Map<string, Set<string>>();
+  /** token -> positions in `docs`. Lets the match phase skip the catalogue. */
+  private tokenPostings = new Map<string, number[]>();
+  private scanAllDocuments: boolean;
+  /** category -> positions in `docs`, for the `category` match field. */
+  private categoryPostings = new Map<string, number[]>();
   private contentReports = new Map<string, ContentReport>();
   private maxViews = 1;
   private maxPurchases = 1;
@@ -134,6 +148,7 @@ export class Engine {
   constructor(plan: Plan, docs: Doc[], options: EngineOptions = {}) {
     this.queryCacheSize = options.queryCacheSize ?? 1024;
     this.embedding = options.embedding ?? null;
+    this.scanAllDocuments = options.scanAllDocuments ?? false;
     if (plan.irVersion !== 1) {
       throw new PlanVersionError(
         `Plan koristi IR verziju ${plan.irVersion}, a ovaj runtime podržava samo 1. Rekompajlirajte .gs fajl.`,
@@ -142,22 +157,71 @@ export class Engine {
     this.plan = plan;
     this.docs = docs;
 
-    for (const doc of docs) {
-      this.docTokens.set(doc.id, tokenizeText(docText(doc)).map(stem));
+    docs.forEach((doc, index) => {
+      const tokens = new Set(tokenizeText(docText(doc)).map(stem));
+      this.docTokens.set(doc.id, tokens);
+
+      for (const token of tokens) {
+        const postings = this.tokenPostings.get(token);
+        if (postings) postings.push(index);
+        else this.tokenPostings.set(token, [index]);
+      }
+
+      const byCategory = this.categoryPostings.get(doc.category);
+      if (byCategory) byCategory.push(index);
+      else this.categoryPostings.set(doc.category, [index]);
+
       this.maxViews = Math.max(this.maxViews, doc.views ?? 0);
       this.maxPurchases = Math.max(this.maxPurchases, doc.purchases ?? 0);
-    }
+    });
 
     // Content analysis is corpus-relative (duplication needs neighbours), so
     // it is computed once up front rather than per query.
     if (plan.content || plan.search?.rank.some((r) => r.signal === 'content_quality' || r.signal === 'originality')) {
-      const texts = docs.map((d) => d.description ?? d.title);
-      const corpus = buildCorpusShingles(texts);
-      docs.forEach((doc, index) => {
-        const others = corpus.filter((_, i) => i !== index);
-        this.contentReports.set(doc.id, analyzeContent(texts[index]!, others));
-      });
+      const reports = analyzeCorpus(docs.map((d) => d.description ?? d.title));
+      docs.forEach((doc, index) => this.contentReports.set(doc.id, reports[index]!));
     }
+  }
+
+  /**
+   * Documents that could possibly match, instead of the whole catalogue.
+   *
+   * This is a narrowing, not an approximation. A document only earns match
+   * score from `keywords` (which requires sharing a query token) or from
+   * `category` (which requires being in the intent's candidate set), so a
+   * document outside both unions would score zero and be filtered out
+   * anyway. `semantic` is the exception: it can relate a query to a
+   * document that shares no word with it, which is the entire point of
+   * having it, so an enabled semantic clause falls back to a full scan.
+   */
+  private candidateDocs(queryTokens: ReadonlySet<string>, intentCategories: Set<string>): Doc[] {
+    if (this.scanAllDocuments) return this.docs;
+
+    const search = this.plan.search!;
+    const weightOf = (field: string): number =>
+      search.match.find((m) => m.field === field)?.weight ?? 0;
+
+    if (weightOf('semantic') > 0) return this.docs;
+
+    const picked = new Set<number>();
+
+    if (weightOf('keywords') > 0) {
+      for (const token of queryTokens) {
+        const postings = this.tokenPostings.get(token);
+        if (postings) for (const index of postings) picked.add(index);
+      }
+    }
+
+    if (weightOf('category') > 0) {
+      for (const category of intentCategories) {
+        const postings = this.categoryPostings.get(category);
+        if (postings) for (const index of postings) picked.add(index);
+      }
+    }
+
+    // Catalogue order, so the candidate list is identical to what the full
+    // scan would have produced rather than merely equivalent as a set.
+    return [...picked].sort((a, b) => a - b).map((index) => this.docs[index]!);
   }
 
   /** Content report for one document, or null if content analysis is not enabled. */
@@ -230,6 +294,7 @@ export class Engine {
     const intent = resolveIntent(this.plan, request.query);
 
     const queryTokens = tokenizeText(request.query).map(stem);
+    const queryTokenSet = new Set(queryTokens);
 
     // --- Candidate retrieval ---------------------------------------------
     // Matching and ranking are separate phases. The `match` block decides who
@@ -257,9 +322,9 @@ export class Engine {
       }
     };
 
-    let candidates = this.docs
+    let candidates = this.candidateDocs(queryTokenSet, intentCategories)
       .map((doc) => {
-        const lexical = overlapScore(queryTokens, this.docTokens.get(doc.id) ?? []);
+        const lexical = overlapScoreSets(queryTokenSet, this.docTokens.get(doc.id) ?? EMPTY_TOKENS);
         let matchScore = 0;
         for (const clause of search.match) {
           matchScore += matchValue(doc, clause.field, lexical) * clause.weight;
@@ -494,8 +559,8 @@ export class Engine {
       case 'user_interest': {
         const interests = request.user?.interests ?? [];
         if (interests.length === 0) return 0;
-        const interestTokens = interests.flatMap((i) => tokenizeText(i).map(stem));
-        return overlapScore(interestTokens, this.docTokens.get(doc.id) ?? []);
+        const interestTokens = new Set(interests.flatMap((i) => tokenizeText(i).map(stem)));
+        return overlapScoreSets(interestTokens, this.docTokens.get(doc.id) ?? EMPTY_TOKENS);
       }
 
       case 'purchase_intent': {
